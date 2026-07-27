@@ -893,6 +893,8 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     uint32_t i;                                                  /* local loop index  */
     int ok;
 
+    /* +16: zero padding so LZX ENSURE_BITS can refill without per-byte bounds
+       checks (see lzx.c). block_len + 6144 already oversized vs real frames. */
     cbufferLen = ctx->reset_table.block_len + 6144;
     cbuffer = lzx_cbuffer_ensure(ctx, cbufferLen);
     if (!cbuffer) return -1;
@@ -927,8 +929,14 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
 
                 /* decompress the previous block */
                 if (!get_cmpblock_bounds(ctx, curBlockIdx, &cmpStart, &cmpLen) || cmpLen < 0 ||
-                    (uint64_t)cmpLen > cbufferLen || fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
-                    LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen, (int)ctx->reset_table.block_len) != DECR_OK) {
+                    (uint64_t)cmpLen + 16 > cbufferLen ||
+                    fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen) {
+                    memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
+                    return (int64_t)0;
+                }
+                memset(cbuffer + cmpLen, 0, 16);
+                if (LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen,
+                                  (int)ctx->reset_table.block_len) != DECR_OK) {
                     /* Leave a deterministic buffer on failure (CHMLib still
                        exposes the cache slot for later reads of this block). */
                     memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
@@ -966,9 +974,14 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     *ubuffer = lbuffer;
 
     ok = get_cmpblock_bounds(ctx, block, &cmpStart, &cmpLen);
-    if (!ok || cmpLen < 0 || (uint64_t)cmpLen > cbufferLen ||
-        fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
-        LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen, (int)ctx->reset_table.block_len) != DECR_OK) {
+    if (!ok || cmpLen < 0 || (uint64_t)cmpLen + 16 > cbufferLen ||
+        fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen) {
+        memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
+        return (int64_t)0;
+    }
+    memset(cbuffer + cmpLen, 0, 16);
+    if (LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen,
+                      (int)ctx->reset_table.block_len) != DECR_OK) {
         /* Slot is already indexed (matches CHMLib); zero so later reads of this
            block do not see uninitialized heap if the decode failed early. */
         memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);

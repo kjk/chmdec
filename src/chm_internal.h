@@ -95,11 +95,12 @@ int LZX_test_pretree_make_decode_table(void); /* test helper */
 /* ===================================================================== */
 
 /* tuning */
-/* Decompressed LZX blocks kept in memory. CHMLib used 5; that thrashes hard when
-   many small entries share/straddle blocks (extract-all / directory walks).
-   Slots are allocated lazily (block_len each, typically 32 KB). Cap covers
-   multi‑MB archives without unbounded growth on huge files. */
-#define CHM_MAX_BLOCKS_CACHED 1024
+/* Decompressed LZX blocks kept in memory. CHMLib used 5; that thrashes when many
+   small entries share blocks. A larger ring helps multi-entry extracts without
+   retaining every block of a 100+ MB archive (full retention = hundreds of MB
+   of first-touch page faults on sequential walks). Slots are allocated lazily
+   (block_len each, typically 32 KB) and reused when the ring wraps. */
+#define CHM_MAX_BLOCKS_CACHED 512
 #define CHM_MAX_DIR_PAGES 65536
 #define CHM_DIR_SEEN_BITMAP_BITS CHM_MAX_DIR_PAGES
 #define CHM_DIR_SEEN_BITMAP_WORDS (CHM_DIR_SEEN_BITMAP_BITS / 32)

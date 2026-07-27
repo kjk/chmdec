@@ -28,10 +28,10 @@ function objFor(src: string): string {
   return `${OUT}/${base}.o`;
 }
 
-/** -O2 release-ish speed; CodeView on Windows so winperf can symbolicate. */
+/** -O3 for decode speed; CodeView on Windows so winperf can symbolicate. */
 function cFlags(): string {
   const pdb = isWindows ? " -g -gcodeview" : " -g";
-  return `-O2 -Wall -Werror -D_CRT_SECURE_NO_WARNINGS${pdb} -I${ROOT}/src -I${ROOT}/test`;
+  return `-O3 -Wall -Werror -D_CRT_SECURE_NO_WARNINGS${pdb} -I${ROOT}/src -I${ROOT}/test`;
 }
 
 // Always compile from scratch. mtime-based incremental builds silently served

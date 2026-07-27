@@ -365,7 +365,7 @@ export async function buildDumpers(): Promise<Dumpers> {
   rmSync(chmlib, { force: true });
 
   await runCompile("our-dump", [
-    "clang", "-O2", "-Wall", "-Werror", "-D_CRT_SECURE_NO_WARNINGS",
+    "clang", "-O3", "-Wall", "-Werror", "-D_CRT_SECURE_NO_WARNINGS",
     `-I${join(ROOT, "src")}`,
     join(ROOT, "src", "lzx.c"), join(ROOT, "src", "chm.c"), OUR_DUMP_C,
     "-o", ours,
@@ -384,7 +384,7 @@ export async function buildDumpers(): Promise<Dumpers> {
     ? ["-DWIN32", "-D_CRT_SECURE_NO_WARNINGS", "-D_CRT_NONSTDC_NO_WARNINGS"]
     : ["-D_stricmp=strcasecmp"];
   await runCompile("chmlib-dump", [
-    "clang", "-O2", "-Wno-macro-redefined", "-include", "limits.h",
+    "clang", "-O3", "-Wno-macro-redefined", "-include", "limits.h",
     ...chmlibShims, `-I${CHMLIB_DIR}`,
     join(CHMLIB_DIR, "lzx.c"), join(CHMLIB_DIR, "chm_lib.c"), CHMLIB_DUMP_C,
     "-o", chmlib,
