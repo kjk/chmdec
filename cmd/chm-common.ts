@@ -8,10 +8,11 @@ import {
   writeFileSync,
   readFileSync,
 } from "fs";
-import { basename, join, resolve } from "path";
+import { basename, isAbsolute, join, relative, resolve } from "path";
 import { CHMLIB_DIR, getDeps } from "./get-deps";
 
 export const ROOT = resolve(import.meta.dir, "..");
+export const CORPUS_DIR = join(ROOT, "testfiles", "chm");
 
 const OUT = join(ROOT, "out", "chm-tools");
 // our-dump is a checked-in source file; chmlib-dump is generated (see below).
@@ -38,6 +39,9 @@ const CHMLIB_DUMP_SOURCE = String.raw`
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
+#include <windows.h>
+#else
+#include <time.h>
 #endif
 #include "chm_lib.h"
 
@@ -50,6 +54,22 @@ static void set_stdout_binary(void)
 {
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);
+#endif
+}
+
+static double now_ms(void)
+{
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart)
+        QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
 #endif
 }
 
@@ -93,6 +113,13 @@ static uint32_t unit_flags(const struct chmUnitInfo *ui)
 }
 
 static int g_emit_data = 1;
+static int g_bench_mode = 0;
+
+struct bench_ctx {
+    int failed;
+    unsigned char *buf;
+    size_t buf_cap;
+};
 
 static int emit_unit(struct chmFile *h, struct chmUnitInfo *ui)
 {
@@ -142,6 +169,71 @@ static int enum_cb(struct chmFile *h, struct chmUnitInfo *ui, void *context)
     return CHM_ENUMERATOR_CONTINUE;
 }
 
+/* Retrieve every file entry into a scratch buffer (no I/O). */
+static int bench_enum_cb(struct chmFile *h, struct chmUnitInfo *ui, void *context)
+{
+    struct bench_ctx *b = (struct bench_ctx *)context;
+    uint64_t want;
+    int64_t n;
+
+    if (ui->flags & CHM_ENUMERATE_DIRS)
+        return CHM_ENUMERATOR_CONTINUE;
+    want = (uint64_t)ui->length;
+    if (want == 0)
+        return CHM_ENUMERATOR_CONTINUE;
+    if (want > SIZE_MAX) {
+        b->failed = 1;
+        return CHM_ENUMERATOR_FAILURE;
+    }
+    if ((size_t)want > b->buf_cap) {
+        unsigned char *nbuf = (unsigned char *)realloc(b->buf, (size_t)want);
+        if (!nbuf) {
+            b->failed = 1;
+            return CHM_ENUMERATOR_FAILURE;
+        }
+        b->buf = nbuf;
+        b->buf_cap = (size_t)want;
+    }
+    n = chm_retrieve_object(h, ui, b->buf, 0, (int64_t)want);
+    if (n != (int64_t)want) {
+        b->failed = 1;
+        return CHM_ENUMERATOR_FAILURE;
+    }
+    return CHM_ENUMERATOR_CONTINUE;
+}
+
+static double session_ms(const char *file_data, size_t sz)
+{
+    struct chmFile *h;
+    struct bench_ctx b;
+    double t0, dt;
+    int ok;
+
+    memset(&b, 0, sizeof(b));
+    t0 = now_ms();
+    h = chm_open(file_data, sz);
+    if (!h)
+        return -1.0;
+    ok = chm_enumerate(h, CHM_ENUMERATE_ALL, bench_enum_cb, &b);
+    chm_close(h);
+    dt = now_ms() - t0;
+    free(b.buf);
+    if (!ok || b.failed)
+        return -1.0;
+    return dt;
+}
+
+static int do_bench(const char *file_data, size_t sz)
+{
+    double ms = session_ms(file_data, sz);
+    if (ms < 0.0) {
+        fprintf(stderr, "bench session failed\n");
+        return 1;
+    }
+    printf("total_ms=%.2f\n", ms);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *file_path = NULL;
@@ -150,11 +242,15 @@ int main(int argc, char **argv)
     } else if (argc == 3 && strcmp(argv[1], "-list") == 0) {
         g_emit_data = 0;
         file_path = argv[2];
+    } else if (argc == 3 && strcmp(argv[1], "-bench") == 0) {
+        g_bench_mode = 1;
+        file_path = argv[2];
     } else {
-        fprintf(stderr, "usage: chmlib-dump [-list] file.chm\n");
+        fprintf(stderr, "usage: chmlib-dump [-list|-bench] file.chm\n");
         return 2;
     }
-    set_stdout_binary();
+    if (!g_bench_mode)
+        set_stdout_binary();
 
     /* The sumatra CHMLib fork takes the whole archive as an in-memory buffer
        (chm_open(data, len)), matching our own API, so read the file first. */
@@ -190,6 +286,12 @@ int main(int argc, char **argv)
         return 1;
     }
     fclose(f);
+
+    if (g_bench_mode) {
+        int rc = do_bench(file_data, (size_t)sz);
+        free(file_data);
+        return rc;
+    }
 
     struct chmFile *h = chm_open(file_data, (size_t)sz);
     if (!h) {
@@ -388,4 +490,91 @@ export function flagsText(flags: number): string {
   const kind = (flags & 2) ? "dir" : ((flags & 4) ? "file" : "object");
   const cls = (flags & 8) ? "normal" : ((flags & 16) ? "meta" : ((flags & 32) ? "special" : "unknown"));
   return `${space} ${cls} ${kind}`;
+}
+
+/* ----- corpus / bench helpers (djvudec-style selection) ----- */
+
+/** Every .chm under testfiles/chm (recursive). CHM_SPECS overrides with any dir. */
+export function corpusFiles(): string[] {
+  const dir = process.env.CHM_SPECS ? resolve(process.env.CHM_SPECS) : CORPUS_DIR;
+  if (!existsSync(dir)) return [];
+  return findChmFiles(dir);
+}
+
+export function pickRandom<T>(items: T[], n: number): T[] {
+  const arr = items.slice();
+  const count = Math.min(n, arr.length);
+  for (let i = 0; i < count; i++) {
+    const j = i + Math.floor(Math.random() * (arr.length - i));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr.slice(0, count);
+}
+
+/**
+ * Explicit paths, -rand N, or -all. With none of those, prints usageText and
+ * exits 2. valueFlags lists flags that take a following value.
+ */
+export function selectFiles(
+  usageText: string,
+  valueFlags: string[] = ["-rand"],
+): string[] {
+  const argv = process.argv.slice(2);
+  const explicit = argv.filter(
+    (a, i) => !a.startsWith("-") && !valueFlags.includes(argv[i - 1] ?? ""),
+  );
+  if (argv.includes("-all")) return corpusFiles();
+  const ri = argv.indexOf("-rand");
+  if (ri >= 0) {
+    const n = parseInt(argv[ri + 1] ?? "", 10);
+    if (!(n > 0)) {
+      console.log(usageText);
+      process.exit(2);
+    }
+    const all = corpusFiles();
+    const picked = pickRandom(all, n);
+    console.log(`(${picked.length} random of ${all.length} corpus files)`);
+    return picked;
+  }
+  if (explicit.length > 0) {
+    const out: string[] = [];
+    for (const f of explicit) {
+      if (!existsSync(f)) {
+        console.error(`no such file: ${f}`);
+        process.exit(1);
+      }
+      out.push(...findChmFiles(f));
+    }
+    return out;
+  }
+  console.log(usageText);
+  process.exit(2);
+}
+
+export function fmtBytesExact(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+export function fmtBytesHuman(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
+}
+
+/** "path/to/file.chm (1.2 MB, 1,234,567 bytes)" relative to repo root when possible. */
+export function fileLabel(f: string, root: string = ROOT): string {
+  let rel = relative(root, f);
+  if (rel.startsWith("..") || isAbsolute(rel)) rel = f;
+  rel = rel.replaceAll("\\", "/");
+  const size = statSync(f).size;
+  return `${rel} (${fmtBytesHuman(size)}, ${fmtBytesExact(size)} bytes)`;
+}
+
+export function corpusSummary(): string {
+  const n = corpusFiles().length;
+  const src = process.env.CHM_SPECS
+    ? `CHM_SPECS=${process.env.CHM_SPECS}`
+    : "testfiles/chm (populate manually; gitignored)";
+  return `${n} .chm file(s) available from ${src}`;
 }

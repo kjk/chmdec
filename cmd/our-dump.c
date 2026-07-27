@@ -1,6 +1,9 @@
 // our-dump -- dump a CHM's entries (metadata + content) in the binary format
 // read by cmd/chm-common.ts (readDump). Used by the test/info tooling to
 // compare chmdec against the upstream CHMLib oracle. Not part of the library.
+//
+//   our-dump [-list] file.chm     binary dump (default: with content)
+//   our-dump -bench file.chm      time open / extract-all / close (one session)
 #include "chm.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -9,6 +12,9 @@
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
+#include <windows.h>
+#else
+#include <time.h>
 #endif
 
 /* stdout carries a binary dump; keep Windows from translating \n to \r\n. */
@@ -16,6 +22,22 @@ static void set_stdout_binary(void)
 {
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);
+#endif
+}
+
+static double now_ms(void)
+{
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart)
+        QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
 #endif
 }
 
@@ -99,19 +121,90 @@ static int emit_entry(chm_ctx *ctx, struct chm_entry *e)
     return ok;
 }
 
+/* Open, extract every non-dir entry into a scratch buffer, close. Returns ms
+   or <0 on failure. File bytes stay outside the timed region. */
+static double session_ms(const uint8_t *file_data, size_t sz)
+{
+    chm_ctx *ctx;
+    struct chm_entry **entries = NULL;
+    int n, i;
+    uint8_t *buf = NULL;
+    size_t buf_cap = 0;
+    double t0, dt;
+
+    ctx = chm_ctx_new(NULL, NULL, NULL, NULL);
+    if (!ctx)
+        return -1.0;
+
+    t0 = now_ms();
+    if (!chm_open(ctx, file_data, sz)) {
+        chm_ctx_free(ctx);
+        return -1.0;
+    }
+    n = chm_get_entries(ctx, &entries);
+    for (i = 0; i < n; i++) {
+        struct chm_entry *e = entries[i];
+        size_t need;
+        int64_t got;
+        if (!e || e->is_dir || e->length == 0)
+            continue;
+        need = (size_t)e->length;
+        if (need > buf_cap) {
+            uint8_t *nbuf = (uint8_t *)realloc(buf, need);
+            if (!nbuf) {
+                free(buf);
+                chm_close(ctx);
+                chm_ctx_free(ctx);
+                return -1.0;
+            }
+            buf = nbuf;
+            buf_cap = need;
+        }
+        got = chm_read_entry(ctx, e, buf);
+        if (got != (int64_t)e->length) {
+            free(buf);
+            chm_close(ctx);
+            chm_ctx_free(ctx);
+            return -1.0;
+        }
+    }
+    free(buf);
+    chm_close(ctx);
+    dt = now_ms() - t0;
+    chm_ctx_free(ctx);
+    return dt;
+}
+
+static int do_bench(const uint8_t *file_data, size_t sz)
+{
+    double ms = session_ms(file_data, sz);
+    if (ms < 0.0) {
+        fprintf(stderr, "bench session failed\n");
+        return 1;
+    }
+    printf("total_ms=%.2f\n", ms);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *file_path = NULL;
+    int do_bench_mode = 0;
+
     if (argc == 2) {
         file_path = argv[1];
     } else if (argc == 3 && strcmp(argv[1], "-list") == 0) {
         g_emit_data = 0;
         file_path = argv[2];
+    } else if (argc == 3 && strcmp(argv[1], "-bench") == 0) {
+        do_bench_mode = 1;
+        file_path = argv[2];
     } else {
-        fprintf(stderr, "usage: our-dump [-list] file.chm\n");
+        fprintf(stderr, "usage: our-dump [-list|-bench] file.chm\n");
         return 2;
     }
-    set_stdout_binary();
+    if (!do_bench_mode)
+        set_stdout_binary();
 
     FILE *f = fopen(file_path, "rb");
     if (!f) {
@@ -145,6 +238,12 @@ int main(int argc, char **argv)
         return 1;
     }
     fclose(f);
+
+    if (do_bench_mode) {
+        int rc = do_bench(file_data, (size_t)sz);
+        free(file_data);
+        return rc;
+    }
 
     chm_ctx *ctx = chm_ctx_new(NULL, NULL, NULL, NULL);
     if (!ctx) {

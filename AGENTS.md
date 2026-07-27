@@ -47,6 +47,8 @@ in sync with `..\winperf\client\winperf_control.h`.
 
 - `bun cmd/build.ts` — builds chm_test + chm_bench (clang; CodeView PDB on Windows)
 - `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm
+- `bun cmd/bench.ts <file.chm … | -rand N | -all>` — open/extract-all/close vs CHMLib
+  (compact `chmlib chmdec diff %diff file` lines; best-of-2 each side)
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies clang -c
 - `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint
 - `bun cmd/build-wasm.ts` — emscripten build → dist/wasm/chm.js + chm.wasm + demo.html
