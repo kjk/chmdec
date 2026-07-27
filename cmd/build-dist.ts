@@ -58,7 +58,15 @@ function stripCComments(code: string): string {
 }
 
 function stripTrailingWS(s: string): string {
-  return s.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n");
+  // Always emit LF. Collapse 2+ consecutive blank lines to one; drop leading
+  // blanks (from stripped headers); end with a single trailing newline.
+  return s
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "\n");
 }
 
 // Always regenerate and re-verify the amalgamation. mtime-based caching risked
@@ -87,7 +95,7 @@ export async function buildDist() {
   amalgam = stripCComments(amalgam);
   amalgam = stripTrailingWS(amalgam);
 
-  writeFileSync(DIST_H, pub);
+  writeFileSync(DIST_H, stripTrailingWS(pub));
   writeFileSync(DIST_C, amalgam);
 
   // verify compiles

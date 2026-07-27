@@ -18,7 +18,9 @@ No writers. No FS I/O.
 - src/chm.c            — main logic
 - src/lzx.c            — LZX decompressor
 - cmd/*.ts             — bun build/dist/fuzz/tests/...
-- dist/                — amalgamation (never auto-committed)
+- dist/                — amalgamation (chm.h/c) + optional dist/wasm/
+- cmd/wasm-demo.html   — browser demo source (copied to dist/wasm/demo.html)
+- cmd/chm_wasm_api.c   — thin JS-friendly wasm exports
 - fuzz/                — crashes/ tracked; corpus/ ignored
 - test/                — chm_test.c , fuzz_target.c
 - test/CHMLib/         — vendored sumatrapdf ext/CHMLib fork (oracle for cmd/test.ts)
@@ -35,7 +37,9 @@ No writers. No FS I/O.
 - `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies clang -c
 - `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint
-- `bun cmd/build-wasm.ts` — optional emscripten single-file
+- `bun cmd/build-wasm.ts` — emscripten build → dist/wasm/chm.js + chm.wasm + demo.html
+  (bootstraps `deps/emsdk` if `emcc` is missing; `-clean` wipes/reinstalls emsdk)
+- `bun cmd/run-wasm-demo.ts` — serve dist/wasm (optional `-build`, `-port N`)
 
 No heavy C++ oracle like djvudec; correctness is by enumeration + roundtrip retrieve on known good .chm files + fuzz.
 
@@ -58,7 +62,10 @@ No heavy C++ oracle like djvudec; correctness is by enumeration + roundtrip retr
 Crashes go to fuzz/crashes/ (commit them as seeds). Use -repro to debug.
 
 ## Wasm
-wasm/ holds the demo build (optional).
+`dist/wasm/` holds the emscripten build (`chm.js` + `chm.wasm`, LF-only JS glue) and `demo.html`.
+Source demo: `cmd/wasm-demo.html`; JS glue API: `cmd/chm_wasm_api.c`.
+If `emcc` is not on PATH, `build-wasm.ts` clones/installs emsdk into `deps/emsdk` (gitignored).
+Serve with `bun cmd/run-wasm-demo.ts` (use `-build` to compile first).
 
 ## Windows / mac notes
 - Test harness uses fopen (ASCII paths only). Library itself is pure bytes.

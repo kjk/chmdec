@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>chmdec — CHM browser demo</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1115;
+      --panel: #171a21;
+      --border: #2a3140;
+      --text: #e8eaed;
+      --muted: #9aa3b2;
+      --accent: #6ea8fe;
+      --ok: #3dd68c;
+      --err: #ff6b6b;
+      --drop: #1c2330;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f6f8;
+        --panel: #fff;
+        --border: #d0d7de;
+        --text: #1f2328;
+        --muted: #656d76;
+        --accent: #0969da;
+        --ok: #1a7f37;
+        --err: #cf222e;
+        --drop: #eef2f7;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 650;
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+    .sub {
+      color: var(--muted);
+      margin: 0 0 1.5rem;
+      font-size: 0.95rem;
+    }
+    #drop {
+      border: 1.5px dashed var(--border);
+      border-radius: 12px;
+      background: var(--drop);
+      padding: 2.25rem 1.25rem;
+      text-align: center;
+      transition: border-color 0.15s, background 0.15s;
+      cursor: pointer;
+    }
+    #drop.drag {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, var(--drop));
+    }
+    #drop p { margin: 0.35rem 0; color: var(--muted); }
+    #drop strong { color: var(--text); }
+    #file {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      overflow: hidden;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: center;
+      margin-top: 1rem;
+    }
+    button, .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.5rem 0.9rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover, .btn:hover { border-color: var(--accent); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status {
+      margin: 1rem 0 0.5rem;
+      min-height: 1.4em;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    #status.error { color: var(--err); }
+    #status.ok { color: var(--ok); }
+    .panel {
+      margin-top: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      overflow: hidden;
+      display: none;
+    }
+    .panel.show { display: block; }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .meta strong { color: var(--text); font-weight: 600; }
+    .table-wrap { max-height: min(60vh, 640px); overflow: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.45rem 0.85rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--panel);
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    td.path { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.84rem; }
+    td.size { white-space: nowrap; color: var(--muted); width: 7rem; }
+    td.kind { width: 4.5rem; color: var(--muted); }
+    tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+    footer {
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>chmdec demo</h1>
+    <p class="sub">Open or drop a <code>.chm</code> file to list every entry path and size (in-browser wasm).</p>
+
+    <div id="drop" tabindex="0" role="button" aria-label="Open or drop a CHM file">
+      <p><strong>Drop a .chm file here</strong></p>
+      <p>or click to choose a file</p>
+      <div class="row">
+        <button type="button" id="pick">Choose file…</button>
+      </div>
+      <input id="file" type="file" accept=".chm,application/vnd.ms-htmlhelp,application/octet-stream" />
+    </div>
+
+    <div id="status">Loading wasm…</div>
+
+    <div id="panel" class="panel">
+      <div class="meta" id="meta"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Kind</th>
+              <th>Size</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <footer>
+      Built with <a href="https://github.com/kjk/chmdec">chmdec</a>.
+      Serve via <code>bun cmd/run-wasm-demo.ts</code> (needs <code>dist/wasm/chm.js</code> + <code>chm.wasm</code>).
+    </footer>
+  </main>
+
+  <script src="chm.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    const panel = $("panel");
+    const tbody = $("tbody");
+    const meta = $("meta");
+    const drop = $("drop");
+    const fileInput = $("file");
+
+    let Module = null;
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.className = kind || "";
+    }
+
+    function formatSize(n) {
+      if (!Number.isFinite(n) || n < 0) return "—";
+      if (n < 1024) return n + " B";
+      const units = ["KB", "MB", "GB"];
+      let v = n;
+      let u = -1;
+      do { v /= 1024; u++; } while (v >= 1024 && u < units.length - 1);
+      return v.toFixed(v >= 10 || u === 0 ? 1 : 2) + " " + units[u];
+    }
+
+    function listChm(bytes, fileName) {
+      if (!Module) throw new Error("wasm not ready");
+      const heap = Module._malloc(bytes.byteLength);
+      if (!heap) throw new Error("malloc failed");
+      try {
+        Module.HEAPU8.set(bytes, heap);
+        const ctx = Module._chm_wasm_open(heap, bytes.byteLength);
+        if (!ctx) throw new Error("failed to open CHM (invalid or unsupported file)");
+        try {
+          const n = Module._chm_wasm_entry_count(ctx);
+          const rows = [];
+          let files = 0, dirs = 0, totalBytes = 0;
+          for (let i = 0; i < n; i++) {
+            const pathPtr = Module._chm_wasm_entry_path(ctx, i);
+            const path = pathPtr ? Module.UTF8ToString(pathPtr) : "(null)";
+            const length = Module._chm_wasm_entry_length(ctx, i);
+            const isDir = Module._chm_wasm_entry_is_dir(ctx, i) !== 0;
+            const isFile = Module._chm_wasm_entry_is_file(ctx, i) !== 0;
+            if (isDir) dirs++;
+            if (isFile) files++;
+            totalBytes += length;
+            rows.push({ path, length, isDir, isFile });
+          }
+          rows.sort((a, b) => a.path.localeCompare(b.path));
+          tbody.replaceChildren();
+          const frag = document.createDocumentFragment();
+          for (const r of rows) {
+            const tr = document.createElement("tr");
+            const kind = r.isDir ? "dir" : r.isFile ? "file" : "—";
+            tr.innerHTML =
+              `<td class="path"></td>` +
+              `<td class="kind"></td>` +
+              `<td class="size"></td>`;
+            tr.children[0].textContent = r.path;
+            tr.children[1].textContent = kind;
+            tr.children[2].textContent = r.isDir ? "—" : formatSize(r.length) + " (" + r.length + ")";
+            frag.appendChild(tr);
+          }
+          tbody.appendChild(frag);
+          meta.innerHTML =
+            `<span><strong>${escapeHtml(fileName)}</strong></span>` +
+            `<span>${n} entries</span>` +
+            `<span>${files} files · ${dirs} dirs</span>` +
+            `<span>payload sum ${formatSize(totalBytes)}</span>` +
+            `<span>archive ${formatSize(bytes.byteLength)}</span>`;
+          panel.classList.add("show");
+          setStatus(`Listed ${n} entries from ${fileName}`, "ok");
+        } finally {
+          Module._chm_wasm_close(ctx);
+        }
+      } finally {
+        Module._free(heap);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function handleFile(file) {
+      if (!file) return;
+      setStatus(`Reading ${file.name}…`);
+      panel.classList.remove("show");
+      try {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        listChm(buf, file.name);
+      } catch (e) {
+        console.error(e);
+        setStatus(e && e.message ? e.message : String(e), "error");
+      }
+    }
+
+    function onFiles(fileList) {
+      const file = fileList && fileList[0];
+      if (file) handleFile(file);
+    }
+
+    drop.addEventListener("click", () => fileInput.click());
+    drop.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+    });
+    $("pick").addEventListener("click", (e) => { e.stopPropagation(); fileInput.click(); });
+    fileInput.addEventListener("change", () => onFiles(fileInput.files));
+
+    ["dragenter", "dragover"].forEach((ev) => {
+      drop.addEventListener(ev, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        drop.classList.add("drag");
+      });
+    });
+    ["dragleave", "drop"].forEach((ev) => {
+      drop.addEventListener(ev, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        drop.classList.remove("drag");
+      });
+    });
+    drop.addEventListener("drop", (e) => onFiles(e.dataTransfer && e.dataTransfer.files));
+
+    (async () => {
+      try {
+        if (typeof createChmModule !== "function") {
+          throw new Error("chm.js did not export createChmModule — run bun cmd/build-wasm.ts");
+        }
+        Module = await createChmModule({
+          locateFile: (path) => path, // chm.wasm next to chm.js / demo.html
+        });
+        setStatus("Ready — open or drop a .chm file");
+      } catch (e) {
+        console.error(e);
+        setStatus(
+          (e && e.message ? e.message : String(e)) +
+            " — build with: bun cmd/build-wasm.ts (requires emcc)",
+          "error"
+        );
+      }
+    })();
+  </script>
+</body>
+</html>
