@@ -49,7 +49,8 @@
 #define LZX_PRETREE_MAXSYMBOLS (LZX_PRETREE_NUM_ELEMENTS)
 #define LZX_PRETREE_TABLEBITS (6)
 #define LZX_MAINTREE_MAXSYMBOLS (LZX_NUM_CHARS + 50 * 8)
-#define LZX_MAINTREE_TABLEBITS (12)
+/* Slightly wider direct map (was 12): fewer long-code walks on main symbols. */
+#define LZX_MAINTREE_TABLEBITS (13)
 #define LZX_LENGTH_MAXSYMBOLS (LZX_NUM_SECONDARY_LENGTHS + 1)
 #define LZX_LENGTH_TABLEBITS (12)
 #define LZX_ALIGNED_MAXSYMBOLS (LZX_ALIGNED_NUM_ELEMENTS)
@@ -95,12 +96,14 @@ int LZX_test_pretree_make_decode_table(void); /* test helper */
 /* ===================================================================== */
 
 /* tuning */
-/* Decompressed LZX blocks kept in memory. CHMLib used 5; that thrashes when many
-   small entries share blocks. A larger ring helps multi-entry extracts without
-   retaining every block of a 100+ MB archive (full retention = hundreds of MB
-   of first-touch page faults on sequential walks). Slots are allocated lazily
-   (block_len each, typically 32 KB) and reused when the ring wraps. */
-#define CHM_MAX_BLOCKS_CACHED 512
+/* Decompressed LZX blocks kept in memory. CHMLib used 5; that thrashes when
+   directory order jumps around. We retain every block when block_count fits
+   under CHM_FULL_CACHE_MAX_BLOCKS (~50 MB at 32 KB/block); larger archives
+   use a small ring so sequential extracts do not first-touch hundreds of MB.
+   Slots are allocated lazily. */
+#define CHM_MAX_BLOCKS_CACHED 2048
+#define CHM_FULL_CACHE_MAX_BLOCKS 1536
+#define CHM_RING_CACHE_BLOCKS 64
 #define CHM_MAX_DIR_PAGES 65536
 #define CHM_DIR_SEEN_BITMAP_BITS CHM_MAX_DIR_PAGES
 #define CHM_DIR_SEEN_BITMAP_WORDS (CHM_DIR_SEEN_BITMAP_BITS / 32)

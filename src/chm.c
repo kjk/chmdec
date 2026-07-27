@@ -1238,11 +1238,15 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
         if (!ok) {
             ctx->compression_enabled = 0;
         } else {
-            /* Prefer one cache slot per LZX block so extract-all never re-decodes
-               a block already visited (modulo only kicks in above the cap). */
-            if (ctx->reset_table.block_count > 0 &&
-                ctx->reset_table.block_count < (uint32_t)CHM_MAX_BLOCKS_CACHED)
-                ctx->cache_num_blocks = (int)ctx->reset_table.block_count;
+            /* Full retain when the compressed section is modest: extract-all in
+               directory order often revisits blocks; re-decoding from a reset
+               point is far costlier than holding ~1k × 32 KB. Huge archives
+               stay on a small ring (sequential walks only need recent slots). */
+            uint32_t bc = ctx->reset_table.block_count;
+            if (bc > 0 && bc <= (uint32_t)CHM_FULL_CACHE_MAX_BLOCKS)
+                ctx->cache_num_blocks = (int)bc;
+            else if (bc > (uint32_t)CHM_FULL_CACHE_MAX_BLOCKS)
+                ctx->cache_num_blocks = CHM_RING_CACHE_BLOCKS;
             else
                 ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
         }

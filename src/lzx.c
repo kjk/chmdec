@@ -649,7 +649,13 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                             }
                             if (match_length > 0) {
                                 if (match_offset >= (uint32_t)match_length) {
-                                    memcpy(rundest, runsrc, (size_t)match_length);
+                                    /* Short matches: avoid memcpy call overhead. */
+                                    if ((uint32_t)match_length <= 8) {
+                                        while (match_length-- > 0)
+                                            *rundest++ = *runsrc++;
+                                    } else {
+                                        memcpy(rundest, runsrc, (size_t)match_length);
+                                    }
                                 } else {
                                     while (match_length-- > 0)
                                         *rundest++ = *runsrc++;
@@ -737,7 +743,12 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                             }
                             if (match_length > 0) {
                                 if (match_offset >= (uint32_t)match_length) {
-                                    memcpy(rundest, runsrc, (size_t)match_length);
+                                    if ((uint32_t)match_length <= 8) {
+                                        while (match_length-- > 0)
+                                            *rundest++ = *runsrc++;
+                                    } else {
+                                        memcpy(rundest, runsrc, (size_t)match_length);
+                                    }
                                 } else {
                                     while (match_length-- > 0)
                                         *rundest++ = *runsrc++;
