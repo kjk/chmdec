@@ -866,6 +866,21 @@ static int get_cmpblock_bounds(chm_ctx *ctx, uint64_t block, uint64_t* start, in
     return 1;
 }
 
+/* Ensure ctx->lzx_cbuffer holds at least need bytes. Returns NULL on OOM. */
+static uint8_t *lzx_cbuffer_ensure(chm_ctx *ctx, uint64_t need)
+{
+    uint8_t *p;
+    if (ctx->lzx_cbuffer && ctx->lzx_cbuffer_len >= need)
+        return ctx->lzx_cbuffer;
+    p = (uint8_t *)chm_alloc(ctx, (size_t)need);
+    if (!p)
+        return NULL;
+    chm_free(ctx, ctx->lzx_cbuffer);
+    ctx->lzx_cbuffer = p;
+    ctx->lzx_cbuffer_len = need;
+    return p;
+}
+
 /* decompress the block.  must have lzx_mutex. */
 static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer) {
     uint8_t* cbuffer;
@@ -879,7 +894,7 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     int ok;
 
     cbufferLen = ctx->reset_table.block_len + 6144;
-    cbuffer = (uint8_t *)chm_alloc(ctx, (size_t)cbufferLen);
+    cbuffer = lzx_cbuffer_ensure(ctx, cbufferLen);
     if (!cbuffer) return -1;
 
     /* let the caching system pull its weight! */
@@ -904,21 +919,19 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
                 if (!ctx->cache_blocks[indexSlot]) {
                     ctx->cache_blocks[indexSlot] = (uint8_t *)chm_alloc(ctx, (size_t)ctx->reset_table.block_len);
                     if (!ctx->cache_blocks[indexSlot]) {
-                        chm_free(ctx, cbuffer);
                         return -1;
                     }
-                    /* zero fresh cache buffers so bytes past a (partial) decode
-                       are deterministic instead of uninitialized heap. */
-                    memset(ctx->cache_blocks[indexSlot], 0, (size_t)ctx->reset_table.block_len);
                 }
                 ctx->cache_block_indices[indexSlot] = curBlockIdx;
                 lbuffer = ctx->cache_blocks[indexSlot];
 
                 /* decompress the previous block */
                 if (!get_cmpblock_bounds(ctx, curBlockIdx, &cmpStart, &cmpLen) || cmpLen < 0 ||
-                    cmpLen > cbufferLen || fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
+                    (uint64_t)cmpLen > cbufferLen || fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
                     LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen, (int)ctx->reset_table.block_len) != DECR_OK) {
-                    chm_free(ctx, cbuffer);
+                    /* Leave a deterministic buffer on failure (CHMLib still
+                       exposes the cache slot for later reads of this block). */
+                    memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
                     return (int64_t)0;
                 }
 
@@ -934,7 +947,6 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     /* SumatraPDF: prevent division by zero */
     /* https://github.com/sumatrapdfreader/sumatrapdf/issues/5246 */
     if (ctx->cache_num_blocks == 0) {
-        chm_free(ctx, cbuffer);
         return -1;
     }
 
@@ -946,26 +958,24 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     if (!ctx->cache_blocks[indexSlot]) {
         ctx->cache_blocks[indexSlot] = (uint8_t *)chm_alloc(ctx, (size_t)ctx->reset_table.block_len);
         if (!ctx->cache_blocks[indexSlot]) {
-            chm_free(ctx, cbuffer);
             return -1;
         }
-        /* zero fresh cache buffers so bytes past a (partial) decode are
-           deterministic instead of uninitialized heap. */
-        memset(ctx->cache_blocks[indexSlot], 0, (size_t)ctx->reset_table.block_len);
     }
     ctx->cache_block_indices[indexSlot] = block;
     lbuffer = ctx->cache_blocks[indexSlot];
     *ubuffer = lbuffer;
 
     ok = get_cmpblock_bounds(ctx, block, &cmpStart, &cmpLen);
-    if (!ok || cmpLen > cbufferLen || fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
+    if (!ok || cmpLen < 0 || (uint64_t)cmpLen > cbufferLen ||
+        fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
         LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen, (int)ctx->reset_table.block_len) != DECR_OK) {
-        chm_free(ctx, cbuffer);
+        /* Slot is already indexed (matches CHMLib); zero so later reads of this
+           block do not see uninitialized heap if the decode failed early. */
+        memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
         return (int64_t)0;
     }
     ctx->lzx_last_block = (int)block;
 
-    chm_free(ctx, cbuffer);
     return ctx->reset_table.block_len;
 }
 
@@ -1214,6 +1224,14 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
         }
         if (!ok) {
             ctx->compression_enabled = 0;
+        } else {
+            /* Prefer one cache slot per LZX block so extract-all never re-decodes
+               a block already visited (modulo only kicks in above the cap). */
+            if (ctx->reset_table.block_count > 0 &&
+                ctx->reset_table.block_count < (uint32_t)CHM_MAX_BLOCKS_CACHED)
+                ctx->cache_num_blocks = (int)ctx->reset_table.block_count;
+            else
+                ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
         }
     }
 
@@ -1263,6 +1281,10 @@ void chm_close(chm_ctx *ctx)
         ctx->cache_block_indices[i] = -1;
     }
     ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
+
+    chm_free(ctx, ctx->lzx_cbuffer);
+    ctx->lzx_cbuffer = NULL;
+    ctx->lzx_cbuffer_len = 0;
 
     /* clear archive fields (keep alloc/free/error/user) */
     if (ctx->entries) {

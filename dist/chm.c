@@ -127,7 +127,7 @@ int LZXreset(struct LZXstate *pState);
 int LZXdecompress(struct LZXstate *pState, uint8_t *inpos, uint8_t *outpos, int inlen, int outlen);
 int LZX_test_pretree_make_decode_table(void);
 
-#define CHM_MAX_BLOCKS_CACHED 5
+#define CHM_MAX_BLOCKS_CACHED 1024
 #define CHM_MAX_DIR_PAGES 65536
 #define CHM_DIR_SEEN_BITMAP_BITS CHM_MAX_DIR_PAGES
 #define CHM_DIR_SEEN_BITMAP_WORDS (CHM_DIR_SEEN_BITMAP_BITS / 32)
@@ -262,6 +262,9 @@ struct chm_ctx {
     uint8_t *cache_blocks[CHM_MAX_BLOCKS_CACHED];
     int64_t cache_block_indices[CHM_MAX_BLOCKS_CACHED];
     int cache_num_blocks;
+
+    uint8_t *lzx_cbuffer;
+    uint64_t lzx_cbuffer_len;
 
     uint64_t dir_page_count;
     uint64_t dir_pages_seen;
@@ -438,12 +441,30 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
     while (bit_num <= nbits) {
         for (sym = 0; sym < nsyms; sym++) {
             if (length[sym] == bit_num) {
+                uint16_t* d;
+                uint16_t* e;
+                uint16_t v;
+
                 leaf = pos;
 
                 if ((pos += bit_mask) > table_mask) return 1;
 
                 fill = bit_mask;
-                while (fill-- > 0) table[leaf++] = sym;
+                d = table + leaf;
+                e = d + fill;
+                v = sym;
+                while (d + 8 <= e) {
+                    d[0] = v;
+                    d[1] = v;
+                    d[2] = v;
+                    d[3] = v;
+                    d[4] = v;
+                    d[5] = v;
+                    d[6] = v;
+                    d[7] = v;
+                    d += 8;
+                }
+                while (d < e) *d++ = v;
             }
         }
         bit_mask >>= 1;
@@ -749,7 +770,14 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                                 runsrc++;
                             }
 
-                            while (match_length-- > 0) *rundest++ = *runsrc++;
+                            if (match_length > 0) {
+                                if (match_offset >= (uint32_t)match_length) {
+                                    memcpy(rundest, runsrc, (size_t)match_length);
+                                } else {
+                                    while (match_length-- > 0)
+                                        *rundest++ = *runsrc++;
+                                }
+                            }
                         }
                     }
                     break;
@@ -1599,6 +1627,20 @@ static int get_cmpblock_bounds(chm_ctx *ctx, uint64_t block, uint64_t* start, in
     return 1;
 }
 
+static uint8_t *lzx_cbuffer_ensure(chm_ctx *ctx, uint64_t need)
+{
+    uint8_t *p;
+    if (ctx->lzx_cbuffer && ctx->lzx_cbuffer_len >= need)
+        return ctx->lzx_cbuffer;
+    p = (uint8_t *)chm_alloc(ctx, (size_t)need);
+    if (!p)
+        return NULL;
+    chm_free(ctx, ctx->lzx_cbuffer);
+    ctx->lzx_cbuffer = p;
+    ctx->lzx_cbuffer_len = need;
+    return p;
+}
+
 static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer) {
     uint8_t* cbuffer;
     uint64_t cbufferLen;
@@ -1611,7 +1653,7 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     int ok;
 
     cbufferLen = ctx->reset_table.block_len + 6144;
-    cbuffer = (uint8_t *)chm_alloc(ctx, (size_t)cbufferLen);
+    cbuffer = lzx_cbuffer_ensure(ctx, cbufferLen);
     if (!cbuffer) return -1;
 
     if (block - blockAlign <= ctx->lzx_last_block && block >= ctx->lzx_last_block) blockAlign = (block - ctx->lzx_last_block);
@@ -1630,19 +1672,17 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
                 if (!ctx->cache_blocks[indexSlot]) {
                     ctx->cache_blocks[indexSlot] = (uint8_t *)chm_alloc(ctx, (size_t)ctx->reset_table.block_len);
                     if (!ctx->cache_blocks[indexSlot]) {
-                        chm_free(ctx, cbuffer);
                         return -1;
                     }
-
-                    memset(ctx->cache_blocks[indexSlot], 0, (size_t)ctx->reset_table.block_len);
                 }
                 ctx->cache_block_indices[indexSlot] = curBlockIdx;
                 lbuffer = ctx->cache_blocks[indexSlot];
 
                 if (!get_cmpblock_bounds(ctx, curBlockIdx, &cmpStart, &cmpLen) || cmpLen < 0 ||
-                    cmpLen > cbufferLen || fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
+                    (uint64_t)cmpLen > cbufferLen || fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
                     LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen, (int)ctx->reset_table.block_len) != DECR_OK) {
-                    chm_free(ctx, cbuffer);
+
+                    memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
                     return (int64_t)0;
                 }
 
@@ -1656,7 +1696,6 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     }
 
     if (ctx->cache_num_blocks == 0) {
-        chm_free(ctx, cbuffer);
         return -1;
     }
 
@@ -1664,25 +1703,23 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     if (!ctx->cache_blocks[indexSlot]) {
         ctx->cache_blocks[indexSlot] = (uint8_t *)chm_alloc(ctx, (size_t)ctx->reset_table.block_len);
         if (!ctx->cache_blocks[indexSlot]) {
-            chm_free(ctx, cbuffer);
             return -1;
         }
-
-        memset(ctx->cache_blocks[indexSlot], 0, (size_t)ctx->reset_table.block_len);
     }
     ctx->cache_block_indices[indexSlot] = block;
     lbuffer = ctx->cache_blocks[indexSlot];
     *ubuffer = lbuffer;
 
     ok = get_cmpblock_bounds(ctx, block, &cmpStart, &cmpLen);
-    if (!ok || cmpLen > cbufferLen || fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
+    if (!ok || cmpLen < 0 || (uint64_t)cmpLen > cbufferLen ||
+        fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen ||
         LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen, (int)ctx->reset_table.block_len) != DECR_OK) {
-        chm_free(ctx, cbuffer);
+
+        memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
         return (int64_t)0;
     }
     ctx->lzx_last_block = (int)block;
 
-    chm_free(ctx, cbuffer);
     return ctx->reset_table.block_len;
 }
 
@@ -1887,6 +1924,13 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
         }
         if (!ok) {
             ctx->compression_enabled = 0;
+        } else {
+
+            if (ctx->reset_table.block_count > 0 &&
+                ctx->reset_table.block_count < (uint32_t)CHM_MAX_BLOCKS_CACHED)
+                ctx->cache_num_blocks = (int)ctx->reset_table.block_count;
+            else
+                ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
         }
     }
 
@@ -1931,6 +1975,10 @@ void chm_close(chm_ctx *ctx)
         ctx->cache_block_indices[i] = -1;
     }
     ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
+
+    chm_free(ctx, ctx->lzx_cbuffer);
+    ctx->lzx_cbuffer = NULL;
+    ctx->lzx_cbuffer_len = 0;
 
     if (ctx->entries) {
         for (int i = 0; i < ctx->entry_count; i++) {

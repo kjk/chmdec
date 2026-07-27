@@ -307,13 +307,33 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
     while (bit_num <= nbits) {
         for (sym = 0; sym < nsyms; sym++) {
             if (length[sym] == bit_num) {
+                uint16_t* d;
+                uint16_t* e;
+                uint16_t v;
+
                 leaf = pos;
 
                 if ((pos += bit_mask) > table_mask) return 1; /* table overrun */
 
-                /* fill all possible lookups of this symbol with the symbol itself */
+                /* fill all possible lookups of this symbol with the symbol itself.
+                   Short codes fan out to many table slots (bit_mask can be 2k+);
+                   unroll the store — this is hot when rebuilding MAINTREE. */
                 fill = bit_mask;
-                while (fill-- > 0) table[leaf++] = sym;
+                d = table + leaf;
+                e = d + fill;
+                v = sym;
+                while (d + 8 <= e) {
+                    d[0] = v;
+                    d[1] = v;
+                    d[2] = v;
+                    d[3] = v;
+                    d[4] = v;
+                    d[5] = v;
+                    d[6] = v;
+                    d[7] = v;
+                    d += 8;
+                }
+                while (d < e) *d++ = v;
             }
         }
         bit_mask >>= 1;
@@ -636,8 +656,17 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                                 *rundest++ = window[window_size - (size_t)(window - runsrc)];
                                 runsrc++;
                             }
-                            /* copy match data - no worries about destination wraps */
-                            while (match_length-- > 0) *rundest++ = *runsrc++;
+                            /* non-overlapping match: bulk copy. Overlapping
+                               matches (offset < length) must stay bytewise —
+                               they act as RLE and memcpy would be wrong. */
+                            if (match_length > 0) {
+                                if (match_offset >= (uint32_t)match_length) {
+                                    memcpy(rundest, runsrc, (size_t)match_length);
+                                } else {
+                                    while (match_length-- > 0)
+                                        *rundest++ = *runsrc++;
+                                }
+                            }
                         }
                     }
                     break;

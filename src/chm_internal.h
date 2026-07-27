@@ -95,7 +95,11 @@ int LZX_test_pretree_make_decode_table(void); /* test helper */
 /* ===================================================================== */
 
 /* tuning */
-#define CHM_MAX_BLOCKS_CACHED 5 /* recently-decompressed LZX blocks kept (matches CHMLib) */
+/* Decompressed LZX blocks kept in memory. CHMLib used 5; that thrashes hard when
+   many small entries share/straddle blocks (extract-all / directory walks).
+   Slots are allocated lazily (block_len each, typically 32 KB). Cap covers
+   multi‑MB archives without unbounded growth on huge files. */
+#define CHM_MAX_BLOCKS_CACHED 1024
 #define CHM_MAX_DIR_PAGES 65536
 #define CHM_DIR_SEEN_BITMAP_BITS CHM_MAX_DIR_PAGES
 #define CHM_DIR_SEEN_BITMAP_WORDS (CHM_DIR_SEEN_BITMAP_BITS / 32)
@@ -244,10 +248,17 @@ struct chm_ctx {
        earlier entry, be served without re-running the decompressor. It also
        preserves CHMLib's behavior of exposing a block's (partially) decoded
        buffer even when a later part of that block fails to decode. Each
-       cache_blocks[i] holds block_len bytes (allocated lazily) or is NULL. */
+       cache_blocks[i] holds block_len bytes (allocated lazily) or is NULL.
+       cache_num_blocks is sized to min(block_count, CHM_MAX_BLOCKS_CACHED)
+       when the reset table is known so a full extract can retain every block. */
     uint8_t *cache_blocks[CHM_MAX_BLOCKS_CACHED];
     int64_t cache_block_indices[CHM_MAX_BLOCKS_CACHED];
     int cache_num_blocks;
+
+    /* scratch for one compressed LZX block (reset_table.block_len + 6144);
+       reused across decompress_block calls to avoid alloc/free per block. */
+    uint8_t *lzx_cbuffer;
+    uint64_t lzx_cbuffer_len;
 
     /* dir visit state */
     uint64_t dir_page_count;
