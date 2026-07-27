@@ -1,4 +1,4 @@
-// chm-info.ts -- list CHM entries using libchm or upstream CHMLib.
+// chm-info.ts -- list CHM entries using chmdec or upstream CHMLib.
 import { buildDumpers, findChmFiles, flagsText, readDump } from "./chm-common";
 
 function usage(): never {

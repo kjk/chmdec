@@ -1,4 +1,4 @@
-/* chm_test.c -- simple CLI test harness for libchm (djvudec style). */
+/* chm_test.c -- simple CLI test harness for chmdec (djvudec style). */
 
 #include "chm.h"
 #include <stdio.h>

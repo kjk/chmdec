@@ -1,4 +1,4 @@
-# AGENTS.md — working on the C CHM reader
+# AGENTS.md — working on chmdec
 
 Plain-C, read-only CHM/ITSS archive library. Ported/cleaned from CHMLib (Jed Wing), modeled directly on the djvudec project structure and style.
 

@@ -1,4 +1,4 @@
-// test.ts -- compare libchm extraction against upstream CHMLib.
+// test.ts -- compare chmdec extraction against upstream CHMLib.
 import { buildDumpers, findChmFiles, readDump, type ChmDump, type ChmDumpEntry } from "./chm-common";
 
 type DumpResult = { ok: true; dump: ChmDump } | { ok: false; error: string };

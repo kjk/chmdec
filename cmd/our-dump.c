@@ -1,6 +1,6 @@
 // our-dump -- dump a CHM's entries (metadata + content) in the binary format
 // read by cmd/chm-common.ts (readDump). Used by the test/info tooling to
-// compare libchm against the upstream CHMLib oracle. Not part of the library.
+// compare chmdec against the upstream CHMLib oracle. Not part of the library.
 #include "chm.h"
 #include <stdint.h>
 #include <stdio.h>

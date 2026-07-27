@@ -1,4 +1,4 @@
-# libchm — a plain-C CHM reader
+# chmdec — a plain-C CHM reader
 
 This is a CHM / ITSS archive reader, ported and cleaned from [CHMLib](https://github.com/jedwing/CHMLib).
 

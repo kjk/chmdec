@@ -1,4 +1,4 @@
--I/Users/kjk/src/exp/libchm/src
+-Isrc
 -Wall
 -Werror
 -std=c11
