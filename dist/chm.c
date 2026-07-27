@@ -87,7 +87,8 @@ int chm_get_entries(chm_ctx *ctx, struct chm_entry ***outEntries);
 #define LZX_PRETREE_MAXSYMBOLS (LZX_PRETREE_NUM_ELEMENTS)
 #define LZX_PRETREE_TABLEBITS (6)
 #define LZX_MAINTREE_MAXSYMBOLS (LZX_NUM_CHARS + 50 * 8)
-#define LZX_MAINTREE_TABLEBITS (12)
+
+#define LZX_MAINTREE_TABLEBITS (13)
 #define LZX_LENGTH_MAXSYMBOLS (LZX_NUM_SECONDARY_LENGTHS + 1)
 #define LZX_LENGTH_TABLEBITS (12)
 #define LZX_ALIGNED_MAXSYMBOLS (LZX_ALIGNED_NUM_ELEMENTS)
@@ -127,7 +128,9 @@ int LZXreset(struct LZXstate *pState);
 int LZXdecompress(struct LZXstate *pState, uint8_t *inpos, uint8_t *outpos, int inlen, int outlen);
 int LZX_test_pretree_make_decode_table(void);
 
-#define CHM_MAX_BLOCKS_CACHED 512
+#define CHM_MAX_BLOCKS_CACHED 2048
+#define CHM_FULL_CACHE_MAX_BLOCKS 1536
+#define CHM_RING_CACHE_BLOCKS 64
 #define CHM_MAX_DIR_PAGES 65536
 #define CHM_DIR_SEEN_BITMAP_BITS CHM_MAX_DIR_PAGES
 #define CHM_DIR_SEEN_BITMAP_WORDS (CHM_DIR_SEEN_BITMAP_BITS / 32)
@@ -767,7 +770,13 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                             }
                             if (match_length > 0) {
                                 if (match_offset >= (uint32_t)match_length) {
-                                    memcpy(rundest, runsrc, (size_t)match_length);
+
+                                    if ((uint32_t)match_length <= 8) {
+                                        while (match_length-- > 0)
+                                            *rundest++ = *runsrc++;
+                                    } else {
+                                        memcpy(rundest, runsrc, (size_t)match_length);
+                                    }
                                 } else {
                                     while (match_length-- > 0)
                                         *rundest++ = *runsrc++;
@@ -855,7 +864,12 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                             }
                             if (match_length > 0) {
                                 if (match_offset >= (uint32_t)match_length) {
-                                    memcpy(rundest, runsrc, (size_t)match_length);
+                                    if ((uint32_t)match_length <= 8) {
+                                        while (match_length-- > 0)
+                                            *rundest++ = *runsrc++;
+                                    } else {
+                                        memcpy(rundest, runsrc, (size_t)match_length);
+                                    }
                                 } else {
                                     while (match_length-- > 0)
                                         *rundest++ = *runsrc++;
@@ -2021,9 +2035,11 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
             ctx->compression_enabled = 0;
         } else {
 
-            if (ctx->reset_table.block_count > 0 &&
-                ctx->reset_table.block_count < (uint32_t)CHM_MAX_BLOCKS_CACHED)
-                ctx->cache_num_blocks = (int)ctx->reset_table.block_count;
+            uint32_t bc = ctx->reset_table.block_count;
+            if (bc > 0 && bc <= (uint32_t)CHM_FULL_CACHE_MAX_BLOCKS)
+                ctx->cache_num_blocks = (int)bc;
+            else if (bc > (uint32_t)CHM_FULL_CACHE_MAX_BLOCKS)
+                ctx->cache_num_blocks = CHM_RING_CACHE_BLOCKS;
             else
                 ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
         }
