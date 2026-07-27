@@ -22,7 +22,7 @@ No writers. No FS I/O.
 - cmd/wasm-demo.html   — browser demo source (copied to dist/wasm/demo.html)
 - cmd/chm_wasm_api.c   — thin JS-friendly wasm exports
 - fuzz/                — crashes/ tracked; corpus/ ignored
-- test/                — chm_test.c , fuzz_target.c
+- test/                — chm_test.c , chm_bench.c , fuzz_target.c , winperf_control.h
 - test/CHMLib/         — vendored sumatrapdf ext/CHMLib fork (oracle for cmd/test.ts)
 - testfiles/chm/       — .chm corpus (gitignored, populate manually or via scripts)
 
@@ -33,7 +33,19 @@ No writers. No FS I/O.
 - Usage examples: SumatraPDF ChmFile.cpp, ChmDump.cpp, SumatraTest chm bits
 
 ## Build & test
-- `bun cmd/build.ts` — builds chm_test (clang)
+
+The Windows harness vendors `test/winperf_control.h`, so a **winperf** checkout
+is not required to compile. To record profiles, first look for the private
+winperf repository at `..\winperf`. If it is absent, try to clone it there:
+
+```
+git clone https://github.com/kjk/winperf ..\winperf
+```
+
+The clone requires access to the private repository. Keep the vendored header
+in sync with `..\winperf\client\winperf_control.h`.
+
+- `bun cmd/build.ts` — builds chm_test + chm_bench (clang; CodeView PDB on Windows)
 - `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies clang -c
 - `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint
@@ -42,6 +54,27 @@ No writers. No FS I/O.
 - `bun cmd/run-wasm-demo.ts` — serve dist/wasm (optional `-build`, `-port N`)
 
 No heavy C++ oracle like djvudec; correctness is by enumeration + roundtrip retrieve on known good .chm files + fuzz.
+
+### Windows sampling profiles (winperf)
+
+`test/chm_bench.c` loads a `.chm` into memory, then loops open / decompress every
+entry / close under `winperf_profile_start`/`stop` section marks so disk I/O is
+excluded from the sample set. Build winperf once, then record with
+`-print-agent` (top self-time functions, hot source lines, heaviest call path).
+Needs the **Windows Performance Toolkit** (`xperf.exe` from the ADK) and
+**Administrator rights** (UAC prompt). Give winperf an **absolute path** to the
+exe.
+
+```
+bun cmd/build.ts
+# once: cd ..\winperf && bun cmd/build.ts -release
+
+# from chmdec root; absolute path to the workload exe (relative can attach wrong)
+..\winperf\out\rel64\winperf.exe record -i 4000 -o out\prof\winperf.etl -print-agent -- %CD%\out\clang\chm_bench.exe -loops 10 path\to\file.chm
+```
+
+`-loops N` (default 1) repeats the open/decompress/close session so sampling has
+enough hits. Marks are no-ops when not running under `winperf record`.
 
 ## Coding style (strict)
 - Follow djvudec exactly: header comment `/* name -- desc */`
@@ -68,7 +101,8 @@ If `emcc` is not on PATH, `build-wasm.ts` clones/installs emsdk into `deps/emsdk
 Serve with `bun cmd/run-wasm-demo.ts` (use `-build` to compile first).
 
 ## Windows / mac notes
-- Test harness uses fopen (ASCII paths only). Library itself is pure bytes.
+- Test harness / bench use fopen (ASCII paths only). Library itself is pure bytes.
 - Use clang everywhere for this tree.
+- Profiling: see **Windows sampling profiles (winperf)** above (`chm_bench` + `winperf_control.h`).
 
 When editing, run `bun cmd/build.ts && bun cmd/tests.ts` and `bun cmd/build-dist.ts` before considering done.
