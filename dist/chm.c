@@ -1,5 +1,3 @@
-
-
 #ifndef CHM_H
 #define CHM_H
 
@@ -1972,4 +1970,3 @@ int64_t chm_read_entry(chm_ctx *ctx, struct chm_entry *entry, uint8_t *buf) {
     if (!entry) return 0;
     return read_entry_range(ctx, entry, buf, 0, entry->length);
 }
-
