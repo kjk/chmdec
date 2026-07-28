@@ -3,13 +3,18 @@ import { $ } from "bun";
 import { build } from "./build";
 import { readdirSync } from "fs";
 import { join } from "path";
+import { getDeps } from "./get-deps";
 
 const ROOT = `${import.meta.dir}/..`;
 
 async function main() {
+  const corpusDir = await getDeps();
   const exe = await build(true);
-  const corpusDir = join(ROOT, "testfiles", "chm");
   const files = readdirSync(corpusDir).filter(f => f.toLowerCase().endsWith(".chm"));
+  if (files.length === 0) {
+    console.error("no .chm files under testfiles/chm (run: bun cmd/get-deps.ts)");
+    process.exit(1);
+  }
   console.log(`testing ${files.length} chm files`);
   let passed = 0, failed = 0;
   for (const f of files) {

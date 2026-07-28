@@ -516,7 +516,7 @@ function requireCorpus(files: string[], kind: string): string[] {
   if (files.length > 0) return files;
   const hint = process.env.CHM_SPECS
     ? `CHM_SPECS=${process.env.CHM_SPECS} has no .chm files`
-    : "no .chm files under testfiles/chm (gitignored — copy samples in, or set CHM_SPECS, or pass paths)";
+    : "no .chm files under testfiles/chm (run: bun cmd/get-deps.ts, or set CHM_SPECS, or pass paths)";
   console.error(`${kind}: ${hint}`);
   process.exit(1);
 }
@@ -589,6 +589,6 @@ export function corpusSummary(): string {
   const n = corpusFiles().length;
   const src = process.env.CHM_SPECS
     ? `CHM_SPECS=${process.env.CHM_SPECS}`
-    : "testfiles/chm (populate manually; gitignored)";
+    : "testfiles/chm (bun cmd/get-deps.ts; gitignored)";
   return `${n} .chm file(s) available from ${src}`;
 }

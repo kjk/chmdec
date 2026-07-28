@@ -37,7 +37,8 @@ For dev, we require bun and use msvc and clang as C compilers.
 
 ```
 bun cmd/build.ts          # builds out/clang/chm_test
-bun cmd/tests.ts          # smoke tests over testfiles/chm
+bun cmd/get-deps.ts       # download public .chm samples → testfiles/chm
+bun cmd/tests.ts          # smoke tests over testfiles/chm (auto get-deps)
 bun cmd/build-dist.ts     # updates dist/chm.{h,c} (+ wasm when run as main)
 bun cmd/build-wasm.ts     # dist/wasm/chm.js + chm.wasm + demo.html (bootstraps emsdk if needed)
 bun cmd/verify-wasm.ts f.chm  # open/list through the wasm glue (CI)

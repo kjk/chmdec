@@ -24,7 +24,7 @@ No writers. No FS I/O.
 - fuzz/                — crashes/ tracked; corpus/ ignored
 - test/                — chm_test.c , chm_bench.c , fuzz_target.c , winperf_control.h
 - test/CHMLib/         — vendored sumatrapdf ext/CHMLib fork (oracle for cmd/test.ts)
-- testfiles/chm/       — .chm corpus (gitignored, populate manually or via scripts)
+- testfiles/chm/       — .chm corpus (gitignored; `bun cmd/get-deps.ts` fills from public GitHub samples)
 
 ## Reference
 - Oracle: test/CHMLib (vendored sumatrapdf ext/CHMLib fork, in-mem chm_open).
@@ -46,7 +46,9 @@ The clone requires access to the private repository. Keep the vendored header
 in sync with `..\winperf\client\winperf_control.h`.
 
 - `bun cmd/build.ts` — builds chm_test + chm_bench (clang; CodeView PDB on Windows)
-- `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm
+- `bun cmd/get-deps.ts` — download public .chm samples into testfiles/chm
+  (`-large` adds a ~43 MB Revit API help CHM for bench; `-force` re-downloads)
+- `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm (calls get-deps first)
 - `bun cmd/bench.ts <file.chm … | -rand N | -all>` — open/extract-all/close vs CHMLib
   (compact `chmlib chmdec diff %diff file` lines; best-of-2 each side)
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies clang -c
