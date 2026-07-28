@@ -51,7 +51,7 @@ in sync with `..\winperf\client\winperf_control.h`.
   CHMs; `-force` re-downloads; drops obsolete truncated DotZLib.chm)
 - `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm (calls get-deps first)
 - `bun cmd/bench.ts <file.chm … | -rand N | -all>` — open/extract-all/close vs CHMLib
-  (compact `chmlib chmdec diff %diff file` lines; best-of-2 each side)
+  (compact `chmlib chmdec diff %diff file` lines; best-of-3 each side)
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies clang -c
   (also rebuilds the wasm drop when run as main)
 - `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint.

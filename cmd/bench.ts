@@ -4,21 +4,33 @@
 //   bun cmd/bench.ts -list-files
 //
 // Builds our-dump + chmlib-dump, then for each file runs both with -bench:
-// load .chm into memory, open, extract every entry, close (best of 2 sessions
+// load .chm into memory, open, extract every entry, close (best of 3 sessions
 // per side). Compact default line (djvudec-style):
 //
 //   chmlib   chmdec     diff    %diff file
-//    62.50    34.20   -28.30   -45.3% path/to/file.chm (2.5 MB, 2,639,774 bytes)
+//    62.50    34.20   -28.30   -45.3% path/to/file.chm : 2,639,774 bytes
 //
 // (+ = chmdec slower). With no selection prints usage + corpus file count.
+import { isAbsolute, relative } from "path";
+import { statSync } from "fs";
 import {
+  CORPUS_DIR,
   ROOT,
   buildDumpers,
   corpusFiles,
   corpusSummary,
-  fileLabel,
+  fmtBytesExact,
   selectFiles,
 } from "./chm-common";
+import { getDeps } from "./get-deps";
+
+/** Path relative to corpus dir + exact size: `main.chm : 49,749 bytes`. */
+function benchLabel(f: string): string {
+  let rel = relative(CORPUS_DIR, f);
+  if (rel.startsWith("..") || isAbsolute(rel)) rel = f;
+  rel = rel.replaceAll("\\", "/");
+  return `${rel} : ${fmtBytesExact(statSync(f).size)} bytes`;
+}
 
 function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.round(ms));
@@ -84,9 +96,12 @@ function runBench(exe: string, file: string): number | null {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
+  // Ensure testfiles/chm exists before -list-files / -all / -rand read the corpus.
+  await getDeps();
+
   if (argv.includes("-list-files")) {
     const all = corpusFiles();
-    for (const f of all) console.log(fileLabel(f, ROOT));
+    for (const f of all) console.log(benchLabel(f));
     console.log(`\n${all.length} file(s)`);
     process.exit(0);
   }
@@ -100,7 +115,7 @@ selection (required; default prints this help):
   -list-files     list corpus files (path, size) and exit
 
 Corpus: recursive .chm under testfiles/chm (gitignored), or CHM_SPECS=dir.
-Session: open from memory, extract every entry, close. Best-of-2 each side.
+Session: open from memory, extract every entry, close. Best-of-3 each side.
 Default line: chmlib chmdec diff %diff file  (+ = chmdec slower).
 
 ${corpusSummary()}`,
@@ -114,21 +129,27 @@ ${corpusSummary()}`,
 
   printCompactLine("chmlib", "chmdec", "diff", "%diff", "file");
 
-  for (const file of files) {
-    const label = fileLabel(file, ROOT);
-    // Interleave so a machine-load swing can't hit only one side.
-    const ours1 = runBench(dumpers.ours, file);
-    const lib1 = runBench(dumpers.chmlib, file);
-    const ours2 = runBench(dumpers.ours, file);
-    const lib2 = runBench(dumpers.chmlib, file);
+  const ROUNDS = 3;
+  const bestOf = (times: (number | null)[]): number | null => {
+    let best: number | null = null;
+    for (const t of times) {
+      if (t === null) continue;
+      if (best === null || t < best) best = t;
+    }
+    return best;
+  };
 
-    const best = (a: number | null, b: number | null): number | null => {
-      if (a === null) return b;
-      if (b === null) return a;
-      return a < b ? a : b;
-    };
-    const ours = best(ours1, ours2);
-    const lib = best(lib1, lib2);
+  for (const file of files) {
+    const label = benchLabel(file);
+    // Interleave so a machine-load swing can't hit only one side.
+    const oursRuns: (number | null)[] = [];
+    const libRuns: (number | null)[] = [];
+    for (let i = 0; i < ROUNDS; i++) {
+      oursRuns.push(runBench(dumpers.ours, file));
+      libRuns.push(runBench(dumpers.chmlib, file));
+    }
+    const ours = bestOf(oursRuns);
+    const lib = bestOf(libRuns);
 
     if (ours === null || lib === null) {
       printCompactLine(
