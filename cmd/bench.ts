@@ -5,16 +5,13 @@
 //
 // Builds our-dump + chmlib-dump, then for each file runs both with -bench:
 // load .chm into memory, open, extract every entry, close (best of 3 sessions
-// per side). Compact default line (djvudec-style):
-//
-//   chmlib   chmdec     diff    %diff file
-//    62.50    34.20   -28.30   -45.3% path/to/file.chm : 2,639,774 bytes
-//
-// (+ = chmdec slower). With no selection prints usage + corpus file count.
-import { isAbsolute, relative } from "path";
+// per side). Default output: directory header lines (e.g. testfiles/chm), then
+//   chmlib   chmdec     diff    %diff basename.chm : 2,639,774 bytes
+// (+ = chmdec slower). Last data line is sum of fastest times, label "total".
+// With no selection prints usage + corpus file count.
+import { basename, dirname, isAbsolute, relative } from "path";
 import { statSync } from "fs";
 import {
-  CORPUS_DIR,
   ROOT,
   buildDumpers,
   corpusFiles,
@@ -24,12 +21,34 @@ import {
 } from "./chm-common";
 import { getDeps } from "./get-deps";
 
-/** Path relative to corpus dir + exact size: `main.chm : 49,749 bytes`. */
-function benchLabel(f: string): string {
-  let rel = relative(CORPUS_DIR, f);
+/** Path relative to repo root when possible (forward slashes). */
+function fileRel(f: string): string {
+  let rel = relative(ROOT, f);
   if (rel.startsWith("..") || isAbsolute(rel)) rel = f;
-  rel = rel.replaceAll("\\", "/");
-  return `${rel} : ${fmtBytesExact(statSync(f).size)} bytes`;
+  return rel.replaceAll("\\", "/");
+}
+
+/** Basename + size for compact lines under a directory header. */
+function fileNameLabel(f: string): string {
+  return `${basename(f)} : ${fmtBytesExact(statSync(f).size)} bytes`;
+}
+
+/** Print dir once when it changes; return basename(+size) for the line. */
+function enterDirAndName(
+  file: string,
+  lastDir: { value: string },
+): string {
+  const rel = fileRel(file);
+  const dir = dirname(rel).replaceAll("\\", "/");
+  if (dir !== lastDir.value) {
+    console.log(dir);
+    lastDir.value = dir;
+  }
+  try {
+    return fileNameLabel(file);
+  } catch {
+    return basename(file);
+  }
 }
 
 function formatElapsed(ms: number): string {
@@ -101,7 +120,8 @@ async function main(): Promise<void> {
 
   if (argv.includes("-list-files")) {
     const all = corpusFiles();
-    for (const f of all) console.log(benchLabel(f));
+    const lastDir = { value: "" };
+    for (const f of all) console.log(enterDirAndName(f, lastDir));
     console.log(`\n${all.length} file(s)`);
     process.exit(0);
   }
@@ -112,11 +132,12 @@ selection (required; default prints this help):
   file.chm ...   bench the given files (or a directory of .chm files)
   -rand N         bench N randomly selected corpus files
   -all            bench every corpus file
-  -list-files     list corpus files (path, size) and exit
+  -list-files     list corpus dirs + basenames (with size) and exit
 
 Corpus: recursive .chm under testfiles/chm (gitignored), or CHM_SPECS=dir.
 Session: open from memory, extract every entry, close. Best-of-3 each side.
-Default line: chmlib chmdec diff %diff file  (+ = chmdec slower).
+Default: dir headers, then chmlib chmdec diff %diff basename  (+ = chmdec slower);
+  ends with a "total" line (sum of fastest chmdec vs sum of fastest chmlib).
 
 ${corpusSummary()}`,
   );
@@ -139,8 +160,12 @@ ${corpusSummary()}`,
     return best;
   };
 
+  let sumOurs = 0;
+  let sumLib = 0;
+
+  const lastDir = { value: "" };
   for (const file of files) {
-    const label = benchLabel(file);
+    const nameLabel = enterDirAndName(file, lastDir);
     // Interleave so a machine-load swing can't hit only one side.
     const oursRuns: (number | null)[] = [];
     const libRuns: (number | null)[] = [];
@@ -157,21 +182,34 @@ ${corpusSummary()}`,
         fmtMs(ours),
         "ERROR",
         "ERROR",
-        label,
+        nameLabel,
       );
       nFail++;
       rc = 1;
       continue;
     }
 
+    sumOurs += ours;
+    sumLib += lib;
+
     printCompactLine(
       fmtMs(lib),
       fmtMs(ours),
       fmtDiff(ours, lib),
       fmtPct(ours, lib),
-      label,
+      nameLabel,
     );
     nOk++;
+  }
+
+  if (nOk > 0) {
+    printCompactLine(
+      fmtMs(sumLib),
+      fmtMs(sumOurs),
+      fmtDiff(sumOurs, sumLib),
+      fmtPct(sumOurs, sumLib),
+      "total",
+    );
   }
 
   console.log(`elapsed ${formatElapsed(performance.now() - t0)}`);
