@@ -71,11 +71,10 @@ export async function buildFuzz(clean = false): Promise<string> {
     rmSync(FUZZ_EXE, { force: true });
   }
 
-  const srcs = [
-    join(ROOT, "src", "lzx.c"),
-    join(ROOT, "src", "chm.c"),
-    join(ROOT, "test", "fuzz_target.c"),
-  ];
+  // Relative paths + cwd(ROOT). Avoid path.join for -I: on Windows it
+  // reintroduces backslashes, and a raw `-ID:\...` loses `\a` etc. so clang
+  // never sees the include dir (CI: "chm.h file not found").
+  const srcs = ["src/lzx.c", "src/chm.c", "test/fuzz_target.c"];
   const clang = resolveFuzzClang();
   // CHM_FUZZ_UBSAN=1 adds undefined sanitizer (Linux/macOS CI; Windows
   // ASan+UBSan together is flaky with the VS clang runtime).
@@ -84,14 +83,11 @@ export async function buildFuzz(clean = false): Promise<string> {
     process.env.CHM_FUZZ_UBSAN === "true";
   const sanitize =
     wantUbsan && !isWindows ? "address,undefined,fuzzer" : "address,fuzzer";
-  const inc = `-I${join(ROOT, "src")}`;
-  const cflags = `-O1 -g -fsanitize=${sanitize} -Wall -Werror -D_CRT_SECURE_NO_WARNINGS`;
+  const cflags = `-O1 -g -fsanitize=${sanitize} -Wall -Werror -D_CRT_SECURE_NO_WARNINGS -Isrc`;
 
   console.log(`building chm_fuzz (clang+${sanitize}; ${clang})...`);
   try {
-    await $`${clang} ${{ raw: cflags }} ${{ raw: inc }} ${srcs} -o ${FUZZ_EXE}`.cwd(
-      ROOT,
-    );
+    await $`${clang} ${{ raw: cflags }} ${srcs} -o ${FUZZ_EXE}`.cwd(ROOT);
   } catch (e) {
     if (isMac && clang === "clang") {
       console.error(

@@ -548,11 +548,14 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     pState->intel_started = 1;     /* because we can't assume otherwise */
                     ENSURE_BITS(16);               /* get up to 16 pad bits into the buffer */
                     if (bitsleft > 16) inpos -= 2; /* and align the bitstream! */
-                    R0 = inpos[0] | (inpos[1] << 8) | (inpos[2] << 16) | (inpos[3] << 24);
+                    R0 = (uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8)
+                       | ((uint32_t)inpos[2] << 16) | ((uint32_t)inpos[3] << 24);
                     inpos += 4;
-                    R1 = inpos[0] | (inpos[1] << 8) | (inpos[2] << 16) | (inpos[3] << 24);
+                    R1 = (uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8)
+                       | ((uint32_t)inpos[2] << 16) | ((uint32_t)inpos[3] << 24);
                     inpos += 4;
-                    R2 = inpos[0] | (inpos[1] << 8) | (inpos[2] << 16) | (inpos[3] << 24);
+                    R2 = (uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8)
+                       | ((uint32_t)inpos[2] << 16) | ((uint32_t)inpos[3] << 24);
                     inpos += 4;
                     break;
 
@@ -798,7 +801,8 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     curpos++;
                     continue;
                 }
-                abs_off = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+                abs_off = (int32_t)((uint32_t)data[0] | ((uint32_t)data[1] << 8)
+                                  | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24));
                 if ((abs_off >= -curpos) && (abs_off < filesize)) {
                     rel_off = (abs_off >= 0) ? abs_off - curpos : abs_off + filesize;
                     data[0] = (uint8_t)rel_off;

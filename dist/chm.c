@@ -679,11 +679,14 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     pState->intel_started = 1;
                     ENSURE_BITS(16);
                     if (bitsleft > 16) inpos -= 2;
-                    R0 = inpos[0] | (inpos[1] << 8) | (inpos[2] << 16) | (inpos[3] << 24);
+                    R0 = (uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8)
+                       | ((uint32_t)inpos[2] << 16) | ((uint32_t)inpos[3] << 24);
                     inpos += 4;
-                    R1 = inpos[0] | (inpos[1] << 8) | (inpos[2] << 16) | (inpos[3] << 24);
+                    R1 = (uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8)
+                       | ((uint32_t)inpos[2] << 16) | ((uint32_t)inpos[3] << 24);
                     inpos += 4;
-                    R2 = inpos[0] | (inpos[1] << 8) | (inpos[2] << 16) | (inpos[3] << 24);
+                    R2 = (uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8)
+                       | ((uint32_t)inpos[2] << 16) | ((uint32_t)inpos[3] << 24);
                     inpos += 4;
                     break;
 
@@ -918,7 +921,8 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     curpos++;
                     continue;
                 }
-                abs_off = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+                abs_off = (int32_t)((uint32_t)data[0] | ((uint32_t)data[1] << 8)
+                                  | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24));
                 if ((abs_off >= -curpos) && (abs_off < filesize)) {
                     rel_off = (abs_off >= 0) ? abs_off - curpos : abs_off + filesize;
                     data[0] = (uint8_t)rel_off;
@@ -1008,8 +1012,14 @@ static int read_uchar_array(uint8_t **pData, unsigned int *pLenRemain, uint8_t *
 
 static int read_i32(uint8_t **pData, unsigned int *pLenRemain, int32_t *dest)
 {
+    uint32_t v;
     if (4 > *pLenRemain) return 0;
-    *dest = (*pData)[0] | ((*pData)[1] << 8) | ((*pData)[2] << 16) | ((*pData)[3] << 24);
+
+    v = (uint32_t)(*pData)[0]
+      | ((uint32_t)(*pData)[1] << 8)
+      | ((uint32_t)(*pData)[2] << 16)
+      | ((uint32_t)(*pData)[3] << 24);
+    *dest = (int32_t)v;
     *pData += 4;
     *pLenRemain -= 4;
     return 1;
@@ -1018,7 +1028,10 @@ static int read_i32(uint8_t **pData, unsigned int *pLenRemain, int32_t *dest)
 static int read_u32(uint8_t **pData, unsigned int *pLenRemain, uint32_t *dest)
 {
     if (4 > *pLenRemain) return 0;
-    *dest = (*pData)[0] | ((*pData)[1] << 8) | ((*pData)[2] << 16) | ((*pData)[3] << 24);
+    *dest = (uint32_t)(*pData)[0]
+          | ((uint32_t)(*pData)[1] << 8)
+          | ((uint32_t)(*pData)[2] << 16)
+          | ((uint32_t)(*pData)[3] << 24);
     *pData += 4;
     *pLenRemain -= 4;
     return 1;
@@ -1434,18 +1447,19 @@ static int parse_PMGL_entry(chm_ctx *ctx, uint8_t** pEntry, uint8_t* end, struct
 
     entry->path = (char *)chm_alloc(ctx, (size_t)strLen + 1);
     if (!entry->path) return 0;
-    if (!parse_UTF8(pEntry, end, strLen, entry->path)) {
-        chm_free(ctx, entry->path);
-        entry->path = NULL;
-        return 0;
-    }
+    if (!parse_UTF8(pEntry, end, strLen, entry->path)) goto fail;
 
-    if (!parse_cword(pEntry, end, &strLen)) return 0;
+    if (!parse_cword(pEntry, end, &strLen)) goto fail;
     entry->space = (uint32_t)strLen;
     entry->is_compressed = (strLen == CHM_COMPRESSED);
-    if (!parse_cword(pEntry, end, &entry->start)) return 0;
-    if (!parse_cword(pEntry, end, &entry->length)) return 0;
+    if (!parse_cword(pEntry, end, &entry->start)) goto fail;
+    if (!parse_cword(pEntry, end, &entry->length)) goto fail;
     return 1;
+
+fail:
+    chm_free(ctx, entry->path);
+    entry->path = NULL;
+    return 0;
 }
 
 static int collect_entries(chm_ctx *ctx) {
@@ -2048,6 +2062,7 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
     if (ctx->compression_enabled) {
         sremain = (unsigned int)uiLzxc.length;
         if (uiLzxc.length > sizeof(sbuffer)) {
+            chm_free(ctx, uiLzxc.path);
             chm_close(ctx);
             return false;
         }
@@ -2071,6 +2086,7 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
         }
     }
 
+    chm_free(ctx, uiLzxc.path);
     return true;
 }
 
@@ -2112,6 +2128,9 @@ void chm_close(chm_ctx *ctx)
     ctx->index_head = 0;
     ctx->block_len = 0;
     ctx->span = 0;
+
+    chm_free(ctx, ctx->rt_entry.path);
+    chm_free(ctx, ctx->cn_entry.path);
     memset(&ctx->rt_entry, 0, sizeof(ctx->rt_entry));
     memset(&ctx->cn_entry, 0, sizeof(ctx->cn_entry));
     memset(&ctx->reset_table, 0, sizeof(ctx->reset_table));
