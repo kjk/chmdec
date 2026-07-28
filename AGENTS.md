@@ -47,7 +47,8 @@ in sync with `..\winperf\client\winperf_control.h`.
 
 - `bun cmd/build.ts` — builds chm_test + chm_bench (clang; CodeView PDB on Windows)
 - `bun cmd/get-deps.ts` — download public .chm samples into testfiles/chm
-  (`-large` adds a ~43 MB Revit API help CHM for bench; `-force` re-downloads)
+  (mlocati, Tika, Sumatra LZX fixture, …; `-large` adds ~10 MB + ~43 MB bench
+  CHMs; `-force` re-downloads; drops obsolete truncated DotZLib.chm)
 - `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm (calls get-deps first)
 - `bun cmd/bench.ts <file.chm … | -rand N | -all>` — open/extract-all/close vs CHMLib
   (compact `chmlib chmdec diff %diff file` lines; best-of-2 each side)

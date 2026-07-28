@@ -1,20 +1,25 @@
 // get-deps.ts -- fetch a public .chm test/bench corpus into testfiles/chm/.
 //
-//   bun cmd/get-deps.ts            # small open samples (~0.5 MB)
-//   bun cmd/get-deps.ts -large     # also one large SDK help file (~43 MB)
+//   bun cmd/get-deps.ts            # open samples (~3–4 MB)
+//   bun cmd/get-deps.ts -large     # also large help files for bench
 //   bun cmd/get-deps.ts -force     # re-download even if present
 //
-// Sources (all public GitHub raw URLs):
-//   mlocati/chm-lib          test/samples/{main,second,putty}.chm
-//   madler/zlib              contrib/dotzlib/DotZLib.chm
-//   sumatrapdfreader/...     tests/issue-chm-lzx.chm  (LZX edge case)
+// Sources (public raw URLs; sizes pinned to reject LFS pointers / truncations):
+//   mlocati/chm-lib              test/samples/{main,second,putty}.chm
+//   sumatrapdfreader/sumatrapdf  tests/issue-chm-lzx.chm  (LZX edge case)
 //   mattslay/Visual-FoxPro-Toolkit-for-.NET  VFPToolkitNET.chm
-//   ADN-DevTech/revit-api-chms  2025.3.chm  (-large only; real-world size)
+//   normanbrobinson/chmProcessor WarningBrokenLink.chm
+//   apache/tika                  test-documents/*.chm (Windows help + fixtures)
+//   ADN-DevTech/revit-api-chms   2025.3.chm  (-large)
+//   apache/tika                  testChm2.chm (~10 MB, -large)
+//
+// Note: madler/zlib DotZLib.chm is intentionally omitted — the public copy is
+// truncated (file 72726 B, stream needs 72728) and fails half-way through LZX.
 //
 // The reference CHMLib (sumatrapdf's ext/CHMLib fork) is vendored under
 // test/CHMLib and committed, so no network fetch is needed for the oracle.
 // testfiles/ is gitignored.
-import { existsSync, mkdirSync, writeFileSync, statSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, statSync, unlinkSync } from "fs";
 import { join } from "path";
 
 const ROOT = `${import.meta.dir}/..`;
@@ -35,8 +40,14 @@ type Sample = {
   large?: boolean;
 };
 
+const TIKA_DOC =
+  "https://raw.githubusercontent.com/apache/tika/main/" +
+  "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/" +
+  "tika-parser-microsoft-module/src/test/resources/test-documents";
+
 // Curated public samples. Sizes are fixed so we can skip re-download and reject
-// truncated / LFS-pointer responses without hashing.
+// truncated / LFS-pointer responses without hashing. Prefer archives that
+// 7-Zip `t` reports as intact (ITSF + complete compressed stream).
 const SAMPLES: Sample[] = [
   // mlocati/chm-lib — deliberately published PHP CHMLib test fixtures
   {
@@ -59,12 +70,6 @@ const SAMPLES: Sample[] = [
     url: "https://raw.githubusercontent.com/mlocati/chm-lib/main/test/samples/putty.chm.LICENCE",
     size: 1338,
   },
-  // zlib DotZLib .NET binding help (widely mirrored)
-  {
-    name: "DotZLib.chm",
-    url: "https://raw.githubusercontent.com/madler/zlib/develop/contrib/dotzlib/DotZLib.chm",
-    size: 72726,
-  },
   // SumatraPDF regression fixture (tiny LZX corner case)
   {
     name: "issue-chm-lzx.chm",
@@ -77,7 +82,33 @@ const SAMPLES: Sample[] = [
     url: "https://raw.githubusercontent.com/mattslay/Visual-FoxPro-Toolkit-for-.NET/master/VFPToolkitNET.chm",
     size: 193956,
   },
-  // Large real-world SDK help for benchmarking (opt-in; ~43 MB)
+  // chmProcessor test output (small, intact)
+  {
+    name: "WarningBrokenLink.chm",
+    url:
+      "https://raw.githubusercontent.com/normanbrobinson/chmProcessor/master/" +
+      "chmProcessor/tests/ExitCodeTest/WarningBrokenLink.chm",
+    size: 10983,
+  },
+  // Apache Tika microsoft-parser test CHMs (real Windows help + fixtures)
+  { name: "admin.chm", url: `${TIKA_DOC}/chm/admin.chm`, size: 49749 },
+  { name: "cmak_ops.chm", url: `${TIKA_DOC}/chm/cmak_ops.CHM`, size: 82895 },
+  { name: "comexp.chm", url: `${TIKA_DOC}/chm/comexp.CHM`, size: 109882 },
+  { name: "gpedit.chm", url: `${TIKA_DOC}/chm/gpedit.CHM`, size: 49537 },
+  { name: "tcpip.chm", url: `${TIKA_DOC}/chm/tcpip.CHM`, size: 33186 },
+  { name: "wmicontrol.chm", url: `${TIKA_DOC}/chm/wmicontrol.CHM`, size: 32096 },
+  { name: "testChm.chm", url: `${TIKA_DOC}/testChm.chm`, size: 186259 },
+  { name: "testChm3.chm", url: `${TIKA_DOC}/testChm3.chm`, size: 900481 },
+  { name: "IMJPCL.chm", url: `${TIKA_DOC}/chm/IMJPCL.CHM`, size: 757069 },
+  { name: "IMJPCLE.chm", url: `${TIKA_DOC}/chm/IMJPCLE.CHM`, size: 256718 },
+  { name: "IMTCEN.chm", url: `${TIKA_DOC}/chm/IMTCEN.CHM`, size: 452547 },
+  // Larger bench files (opt-in)
+  {
+    name: "testChm2.chm",
+    url: `${TIKA_DOC}/testChm2.chm`,
+    size: 10807437,
+    large: true,
+  },
   {
     name: "revit-api-2025.3.chm",
     url: "https://raw.githubusercontent.com/ADN-DevTech/revit-api-chms/main/2025.3.chm",
@@ -85,6 +116,9 @@ const SAMPLES: Sample[] = [
     large: true,
   },
 ];
+
+/** Stale files from older get-deps runs that should not stay in the corpus. */
+const REMOVE = ["DotZLib.chm"];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -153,7 +187,7 @@ async function download(
 export type GetDepsOpts = {
   /** Re-download even when size matches. */
   force?: boolean;
-  /** Also fetch large SDK help files for benchmarking. */
+  /** Also fetch large help files for benchmarking. */
   large?: boolean;
 };
 
@@ -163,6 +197,14 @@ export type GetDepsOpts = {
  */
 export async function getDeps(opts: GetDepsOpts = {}): Promise<string> {
   mkdirSync(DEST, { recursive: true });
+
+  for (const name of REMOVE) {
+    const p = join(DEST, name);
+    if (existsSync(p)) {
+      unlinkSync(p);
+      console.log(`corpus: removed obsolete ${name}`);
+    }
+  }
 
   const want = SAMPLES.filter((s) => opts.large || !s.large);
   let fetched = 0;
@@ -200,15 +242,17 @@ if (import.meta.main) {
 Downloads public .chm samples into testfiles/chm/ (gitignored).
 
   -force   re-download even if present
-  -large   also fetch a large Revit API help CHM (~43 MB) for bench
+  -large   also fetch large help CHMs for bench (~10 MB Tika + ~43 MB Revit)
 
-Small set sources:
-  https://github.com/mlocati/chm-lib          (main/second/putty)
-  https://github.com/madler/zlib             (DotZLib.chm)
+Default sources:
+  https://github.com/mlocati/chm-lib
   https://github.com/sumatrapdfreader/sumatrapdf  (issue-chm-lzx.chm)
   https://github.com/mattslay/Visual-FoxPro-Toolkit-for-.NET
+  https://github.com/normanbrobinson/chmProcessor
+  https://github.com/apache/tika  (microsoft-module test-documents)
 
 Large:
+  apache/tika testChm2.chm
   https://github.com/ADN-DevTech/revit-api-chms  (2025.3.chm)
 `);
     process.exit(0);
