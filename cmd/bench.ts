@@ -99,6 +99,7 @@ selection (required; default prints this help):
   -all            bench every corpus file
   -list-files     list corpus files (path, size) and exit
 
+Corpus: recursive .chm under testfiles/chm (gitignored), or CHM_SPECS=dir.
 Session: open from memory, extract every entry, close. Best-of-2 each side.
 Default line: chmlib chmdec diff %diff file  (+ = chmdec slower).
 

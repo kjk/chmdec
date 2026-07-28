@@ -38,11 +38,16 @@ For dev, we require bun and use msvc and clang as C compilers.
 ```
 bun cmd/build.ts          # builds out/clang/chm_test
 bun cmd/tests.ts          # smoke tests over testfiles/chm
-bun cmd/build-dist.ts     # updates dist/chm.{h,c}
+bun cmd/build-dist.ts     # updates dist/chm.{h,c} (+ wasm when run as main)
 bun cmd/build-wasm.ts     # dist/wasm/chm.js + chm.wasm + demo.html (bootstraps emsdk if needed)
+bun cmd/verify-wasm.ts f.chm  # open/list through the wasm glue (CI)
 bun cmd/run-wasm-demo.ts  # serve the browser demo
 bun cmd/fuzz.ts           # libFuzzer (seeded from testfiles/chm)
+bun cmd/fuzz.ts -check-crashes  # replay fuzz/crashes/* under ASan (CI)
 ```
+
+CI (GitHub Actions): `.github/workflows/ci.yml` — Windows/Linux smoke + amalgamation,
+fuzz crash regression, WASM open/list.
 
 CLI:
 ```

@@ -43,6 +43,9 @@ const q = (s: string) => {
 };
 
 // Run a shell command. On Windows uses cmd.exe + emsdk_env.bat; elsewhere bash.
+// Use bash -c (not -lc): a login shell rewrites PATH on macOS (system paths
+// before Homebrew), so Homebrew emcc finds Xcode python3 3.9 and dies —
+// emscripten requires Python >= 3.10 (prefer EMSDK_PYTHON / Homebrew python3).
 function sh(cmd: string, opts: { cwd?: string; allowFail?: boolean; quiet?: boolean } = {}) {
   const cwd = opts.cwd ?? ROOT;
   const stdio = opts.quiet ? ("pipe" as const) : ("inherit" as const);
@@ -51,9 +54,22 @@ function sh(cmd: string, opts: { cwd?: string; allowFail?: boolean; quiet?: bool
   // setting cmd.exe's PATH — emcc then never lands on PATH.
   const env = { ...process.env };
   delete env.MSYSTEM;
+  // Prefer a modern python3 when emcc is on PATH (Homebrew/emsdk).
+  if (!isWin && !env.EMSDK_PYTHON) {
+    for (const py of [
+      "/opt/homebrew/bin/python3",
+      "/usr/local/bin/python3",
+      env.HOME ? `${env.HOME}/.local/bin/python3` : "",
+    ].filter(Boolean)) {
+      if (existsSync(py)) {
+        env.EMSDK_PYTHON = py;
+        break;
+      }
+    }
+  }
   const r = isWin
     ? spawnSync("cmd.exe", ["/d", "/s", "/c", cmd], { cwd, stdio, encoding: "utf8", env })
-    : spawnSync("bash", ["-lc", cmd], { cwd, stdio, encoding: "utf8", env });
+    : spawnSync("bash", ["-c", cmd], { cwd, stdio, encoding: "utf8", env });
   if (!opts.allowFail && r.status !== 0) {
     if (opts.quiet) process.stderr.write(r.stderr ?? "");
     throw new Error(`command failed (${r.status}): ${cmd}`);
@@ -61,11 +77,34 @@ function sh(cmd: string, opts: { cwd?: string; allowFail?: boolean; quiet?: bool
   return r;
 }
 
+function pythonEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.MSYSTEM;
+  if (!isWin && !env.EMSDK_PYTHON) {
+    for (const py of [
+      "/opt/homebrew/bin/python3",
+      "/usr/local/bin/python3",
+    ]) {
+      if (existsSync(py)) {
+        env.EMSDK_PYTHON = py;
+        break;
+      }
+    }
+  }
+  return env;
+}
+
+// True only if emcc is present *and* can print its version (a PATH hit that
+// fails on a too-old python3 must not short-circuit emsdk bootstrap).
 function emccOnPath(): boolean {
   if (isWin) {
     return spawnSync("where", ["emcc"], { shell: true, encoding: "utf8" }).status === 0;
   }
-  return spawnSync("bash", ["-lc", "command -v emcc"], { encoding: "utf8" }).status === 0;
+  return spawnSync(
+    "bash",
+    ["-c", "command -v emcc >/dev/null && emcc --version >/dev/null"],
+    { encoding: "utf8", env: pythonEnv() },
+  ).status === 0;
 }
 
 // Return the shell prefix that puts `emcc` on PATH, or null if we must bootstrap.
@@ -84,8 +123,11 @@ function findEmcc(): string | null {
   } else {
     const r = spawnSync(
       "bash",
-      ["-lc", `source ${q(EMSDK_ENV)} >/dev/null 2>&1 && command -v emcc`],
-      { encoding: "utf8" },
+      [
+        "-c",
+        `source ${q(EMSDK_ENV)} >/dev/null 2>&1 && command -v emcc >/dev/null && emcc --version >/dev/null`,
+      ],
+      { encoding: "utf8", env: process.env },
     );
     if (r.status === 0) return `source ${q(EMSDK_ENV)} >/dev/null 2>&1 && `;
   }
@@ -154,7 +196,8 @@ function compile(prefix: string) {
     "-sMODULARIZE=1",
     "-sEXPORT_NAME=createChmModule",
     "-sALLOW_MEMORY_GROWTH=1",
-    "-sENVIRONMENT=web,worker",
+    // web for the browser demo; node so verify-wasm.ts / Bun can load the .wasm
+    "-sENVIRONMENT=web,worker,node",
     "-sEXPORT_ES6=0",
     `-sEXPORTED_FUNCTIONS=${EXPORTS.join(",")}`,
     `-sEXPORTED_RUNTIME_METHODS=${RUNTIME.join(",")}`,

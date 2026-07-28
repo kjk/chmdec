@@ -50,10 +50,20 @@ in sync with `..\winperf\client\winperf_control.h`.
 - `bun cmd/bench.ts <file.chm … | -rand N | -all>` — open/extract-all/close vs CHMLib
   (compact `chmlib chmdec diff %diff file` lines; best-of-2 each side)
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies clang -c
-- `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint
+  (also rebuilds the wasm drop when run as main)
+- `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint.
+  Flags: `-jobs N`, `-repro FILE`, `-check-crashes` (CI: replay all
+  `fuzz/crashes/*`, expect exit 0), `-minimize`, `-max-len N`. Linux/macOS CI may
+  set `CHM_FUZZ_UBSAN=1` for ASan+UBSan+fuzzer. macOS needs Homebrew LLVM
+  (`brew install llvm`); override with `CHMDEC_FUZZ_CLANG`.
 - `bun cmd/build-wasm.ts` — emscripten build → dist/wasm/chm.js + chm.wasm + demo.html
   (bootstraps `deps/emsdk` if `emcc` is missing; `-clean` wipes/reinstalls emsdk)
+- `bun cmd/verify-wasm.ts <file.chm>` — open/list smoke via the wasm glue (CI)
 - `bun cmd/run-wasm-demo.ts` — serve dist/wasm (optional `-build`, `-port N`)
+- GitHub Actions: `.github/workflows/ci.yml` (Windows clang smoke + amalgamation,
+  Windows ASan crash regression, Linux clang smoke + amalgamation + UBSan
+  crashes, WASM open/list smoke). Full `tests.ts` / CHMLib oracle stays local
+  (needs `testfiles/chm`, gitignored).
 
 No heavy C++ oracle like djvudec; correctness is by enumeration + roundtrip retrieve on known good .chm files + fuzz.
 
@@ -94,7 +104,8 @@ enough hits. Marks are no-ops when not running under `winperf record`.
 - dist/chm.c is single TU: pub header + internal + lzx.c + chm.c with local #includes stripped.
 
 ## Fuzzing
-Crashes go to fuzz/crashes/ (commit them as seeds). Use -repro to debug.
+Crashes go to `fuzz/crashes/` (commit them as seeds). Use `-repro FILE` to
+debug; `bun cmd/fuzz.ts -check-crashes` for the CI regression suite.
 
 ## Wasm
 `dist/wasm/` holds the emscripten build (`chm.js` + `chm.wasm`, LF-only JS glue) and `demo.html`.

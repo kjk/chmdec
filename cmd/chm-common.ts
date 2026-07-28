@@ -511,6 +511,16 @@ export function pickRandom<T>(items: T[], n: number): T[] {
   return arr.slice(0, count);
 }
 
+/** Fail when -all/-rand selected an empty corpus (common: testfiles/chm unset). */
+function requireCorpus(files: string[], kind: string): string[] {
+  if (files.length > 0) return files;
+  const hint = process.env.CHM_SPECS
+    ? `CHM_SPECS=${process.env.CHM_SPECS} has no .chm files`
+    : "no .chm files under testfiles/chm (gitignored — copy samples in, or set CHM_SPECS, or pass paths)";
+  console.error(`${kind}: ${hint}`);
+  process.exit(1);
+}
+
 /**
  * Explicit paths, -rand N, or -all. With none of those, prints usageText and
  * exits 2. valueFlags lists flags that take a following value.
@@ -523,7 +533,7 @@ export function selectFiles(
   const explicit = argv.filter(
     (a, i) => !a.startsWith("-") && !valueFlags.includes(argv[i - 1] ?? ""),
   );
-  if (argv.includes("-all")) return corpusFiles();
+  if (argv.includes("-all")) return requireCorpus(corpusFiles(), "-all");
   const ri = argv.indexOf("-rand");
   if (ri >= 0) {
     const n = parseInt(argv[ri + 1] ?? "", 10);
@@ -531,7 +541,7 @@ export function selectFiles(
       console.log(usageText);
       process.exit(2);
     }
-    const all = corpusFiles();
+    const all = requireCorpus(corpusFiles(), "-rand");
     const picked = pickRandom(all, n);
     console.log(`(${picked.length} random of ${all.length} corpus files)`);
     return picked;
@@ -544,6 +554,10 @@ export function selectFiles(
         process.exit(1);
       }
       out.push(...findChmFiles(f));
+    }
+    if (out.length === 0) {
+      console.error("no .chm files found in the given path(s)");
+      process.exit(1);
     }
     return out;
   }
