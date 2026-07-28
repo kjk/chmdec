@@ -25,6 +25,16 @@
 #endif
 #endif
 
+#ifndef CHM_LIKELY
+#if defined(__GNUC__) || defined(__clang__)
+#define CHM_LIKELY(x) __builtin_expect(!!(x), 1)
+#define CHM_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define CHM_LIKELY(x) (x)
+#define CHM_UNLIKELY(x) (x)
+#endif
+#endif
+
 /* ===================================================================== */
 /* LZX decompressor (from lzx.c, kept here so lzx.c and chm.c share)     */
 /* ===================================================================== */
@@ -90,6 +100,10 @@ void LZXteardown(struct LZXstate *pState);
 int LZXreset(struct LZXstate *pState);
 int LZXdecompress(struct LZXstate *pState, uint8_t *inpos, uint8_t *outpos, int inlen, int outlen);
 int LZX_test_pretree_make_decode_table(void); /* test helper */
+
+/* Zero bytes after each compressed frame so LZX ENSURE_BITS can 16/32-bit
+ * refill past the real end without reading uninitialized heap. */
+#define LZX_INPUT_PAD 64
 
 /* ===================================================================== */
 /* CHM internal types and helpers                                        */
@@ -252,15 +266,18 @@ struct chm_ctx {
        earlier entry, be served without re-running the decompressor. It also
        preserves CHMLib's behavior of exposing a block's (partially) decoded
        buffer even when a later part of that block fails to decode. Each
-       cache_blocks[i] holds block_len bytes (allocated lazily) or is NULL.
-       cache_num_blocks is sized to min(block_count, CHM_MAX_BLOCKS_CACHED)
-       when the reset table is known so a full extract can retain every block. */
+       cache_blocks[i] holds cache_block_alloc_len bytes (allocated lazily) or
+       is NULL. cache_num_blocks is sized to min(block_count,
+       CHM_MAX_BLOCKS_CACHED) when the reset table is known so a full extract
+       can retain every block. Buffers survive chm_close for reuse; indices
+       are invalidated. Freed in chm_ctx_free. */
     uint8_t *cache_blocks[CHM_MAX_BLOCKS_CACHED];
     int64_t cache_block_indices[CHM_MAX_BLOCKS_CACHED];
     int cache_num_blocks;
+    uint32_t cache_block_alloc_len; /* 0 if none allocated; else slot byte size */
 
     /* scratch for one compressed LZX block (reset_table.block_len + 6144);
-       reused across decompress_block calls to avoid alloc/free per block. */
+       reused across decompress_block calls and across chm_close. */
     uint8_t *lzx_cbuffer;
     uint64_t lzx_cbuffer_len;
 

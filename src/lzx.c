@@ -153,8 +153,6 @@ void LZXteardown(struct LZXstate* pState) {
 }
 
 int LZXreset(struct LZXstate* pState) {
-    int i;
-
     pState->R0 = pState->R1 = pState->R2 = 1;
     pState->header_read = 0;
     pState->frames_read = 0;
@@ -165,8 +163,9 @@ int LZXreset(struct LZXstate* pState) {
     pState->window_posn = 0;
     memset(pState->window, 0, pState->window_size);
 
-    for (i = 0; i < LZX_MAINTREE_MAXSYMBOLS + LZX_LENTABLE_SAFETY; i++) pState->MAINTREE_len[i] = 0;
-    for (i = 0; i < LZX_LENGTH_MAXSYMBOLS + LZX_LENTABLE_SAFETY; i++) pState->LENGTH_len[i] = 0;
+    /* delta-coded lens start from 0; bulk clear (was per-byte loop) */
+    memset(pState->MAINTREE_len, 0, sizeof(pState->MAINTREE_len));
+    memset(pState->LENGTH_len, 0, sizeof(pState->LENGTH_len));
 
     return DECR_OK;
 }
@@ -193,8 +192,8 @@ int LZXreset(struct LZXstate* pState) {
         bitbuf = 0;    \
     } while (0)
 
-/* Unchecked 16-bit refill. Callers must leave >=16 readable zero padding
- * bytes past the real compressed input (decompress_block pads the cbuffer). */
+/* Unchecked 16-bit refill. Callers must leave LZX_INPUT_PAD zero bytes past
+ * the real compressed input (decompress_block pads the cbuffer). */
 #define ENSURE_BITS(n)                                                                   \
     while (bitsleft < (n)) {                                                             \
         bitbuf |= (uint64_t)((uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8))              \
@@ -220,14 +219,17 @@ int LZXreset(struct LZXstate* pState) {
 #define SYMTABLE(tbl) (pState->tbl##_table)
 #define LENTABLE(tbl) (pState->tbl##_len)
 
-/* BUILD_TABLE(tablename) builds a huffman lookup table from code lengths.
- * In reality, it just calls make_decode_table() with the appropriate
- * values - they're all fixed by some #defines anyway, so there's no point
- * writing each call out in full by hand.
- */
+/* BUILD_TABLE(tablename) builds a huffman lookup table from code lengths. */
 #define BUILD_TABLE(tbl)                                                                    \
     if (make_decode_table(MAXSYMBOLS(tbl), TABLEBITS(tbl), LENTABLE(tbl), SYMTABLE(tbl))) { \
         return DECR_ILLEGALDATA;                                                            \
+    }
+
+/* Like BUILD_TABLE but with an explicit symbol count (MAINTREE only uses
+ * main_elements, not the full MAXSYMBOLS slot — saves make_decode_table scans). */
+#define BUILD_TABLE_NSYMS(tbl, nsyms)                                              \
+    if (make_decode_table((nsyms), TABLEBITS(tbl), LENTABLE(tbl), SYMTABLE(tbl))) { \
+        return DECR_ILLEGALDATA;                                                   \
     }
 
 /* READ_HUFFSYM(tablename, var) decodes one huffman symbol from the
@@ -252,24 +254,52 @@ int LZXreset(struct LZXstate* pState) {
         REMOVE_BITS(j);                                                    \
     } while (0)
 
-/* Hot-path variants: table/len pointers already in locals (no pState reload). */
-#define READ_HUFFSYM_LOCAL(table, lens, maxsym, tablebits, var)            \
-    do {                                                                   \
-        ENSURE_BITS(16);                                                   \
-        if ((i = (table)[PEEK_BITS(tablebits)]) >= (maxsym)) {             \
-            uint64_t jb = 1ull << (BITBUF_WIDTH - (tablebits));             \
-            do {                                                           \
-                jb >>= 1;                                                  \
-                i <<= 1;                                                   \
-                i |= (bitbuf & jb) ? 1u : 0u;                              \
-                if (!jb) {                                                 \
-                    return DECR_ILLEGALDATA;                               \
-                }                                                          \
-            } while ((i = (table)[i]) >= (maxsym));                        \
-        }                                                                  \
-        j = (lens)[(var) = i];                                             \
-        REMOVE_BITS(j);                                                    \
+/* Hot-path variants: table/len pointers already in locals (no pState reload).
+ * Short codes dominate; mark the long-code walk cold for the branch predictor. */
+#define READ_HUFFSYM_LOCAL(table, lens, maxsym, tablebits, var)                      \
+    do {                                                                             \
+        ENSURE_BITS(16);                                                             \
+        i = (table)[PEEK_BITS(tablebits)];                                           \
+        if (CHM_UNLIKELY(i >= (maxsym))) {                                           \
+            uint64_t jb = 1ull << (BITBUF_WIDTH - (tablebits));                       \
+            do {                                                                     \
+                jb >>= 1;                                                            \
+                i <<= 1;                                                             \
+                i |= (bitbuf & jb) ? 1u : 0u;                                        \
+                if (!jb) {                                                           \
+                    return DECR_ILLEGALDATA;                                         \
+                }                                                                    \
+            } while ((i = (table)[i]) >= (maxsym));                                  \
+        }                                                                            \
+        j = (lens)[(var) = i];                                                       \
+        REMOVE_BITS(j);                                                              \
     } while (0)
+
+/* Non-overlapping match copy: word-sized stores beat byte loops and avoid
+ * memcpy call overhead on typical short/medium LZX matches. Always-inline so
+ * sample does not show a separate frame (call overhead dominated tiny copies). */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((always_inline))
+#endif
+static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM_RESTRICT src,
+                                  int match_length) {
+    uint32_t n = (uint32_t)match_length;
+    if (n <= 8) {
+        while (n--)
+            *dest++ = *src++;
+        return;
+    }
+    while (n >= 8) {
+        uint64_t v;
+        memcpy(&v, src, 8);
+        memcpy(dest, &v, 8);
+        src += 8;
+        dest += 8;
+        n -= 8;
+    }
+    while (n--)
+        *dest++ = *src++;
+}
 
 /* READ_LENGTHS(tablename, first, last) reads in code lengths for symbols
  * first to last in the given table. The code lengths are stored in their
@@ -304,48 +334,74 @@ int LZXreset(struct LZXstate* pState) {
  */
 
 static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, uint16_t* table) {
-    register uint16_t sym;
-    register uint32_t leaf;
-    register uint8_t bit_num = 1;
+    uint16_t sym;
+    uint32_t leaf;
+    uint8_t bit_num;
     uint32_t fill;
     uint32_t pos = 0; /* the current position in the decode table */
     uint32_t table_mask = 1 << nbits;
     uint32_t table_elems = table_mask + (nsyms << 1);
     uint32_t bit_mask = table_mask >> 1; /* don't do 0 length codes */
     uint32_t next_symbol = bit_mask;     /* base of allocation for long codes */
+    /* Bucket symbols by code length once (compact: one list + starts).
+       Classic double loop is O(16 * nsyms) with a near-always-miss length
+       test; MAINTREE rebuilds show up in macOS sample profiles. Canonical
+       order is preserved (symbols still ascend within each length). */
+    uint16_t list[LZX_MAINTREE_MAXSYMBOLS];
+    uint16_t count[17];
+    uint16_t start[18];
+    uint16_t cursor[17];
+    uint32_t si;
+
+    if (nsyms > LZX_MAINTREE_MAXSYMBOLS) return 1;
+    memset(count, 0, sizeof(count));
+    for (si = 0; si < nsyms; si++) {
+        uint8_t L = length[si];
+        if (L > 16) return 1;
+        if (L > 0) count[L]++;
+    }
+    start[1] = 0;
+    for (si = 1; si <= 16; si++)
+        start[si + 1] = (uint16_t)(start[si] + count[si]);
+    memcpy(cursor, start, sizeof(cursor));
+    for (si = 0; si < nsyms; si++) {
+        uint8_t L = length[si];
+        if (L > 0) list[cursor[L]++] = (uint16_t)si;
+    }
 
     /* fill entries for codes short enough for a direct mapping */
+    bit_num = 1;
     while (bit_num <= nbits) {
-        for (sym = 0; sym < nsyms; sym++) {
-            if (length[sym] == bit_num) {
-                uint16_t* d;
-                uint16_t* e;
-                uint16_t v;
+        uint16_t k, end = start[bit_num + 1];
+        for (k = start[bit_num]; k < end; k++) {
+            uint16_t* d;
+            uint16_t* e;
+            uint16_t v;
 
-                leaf = pos;
+            sym = list[k];
+            leaf = pos;
 
-                if ((pos += bit_mask) > table_mask) return 1; /* table overrun */
+            if ((pos += bit_mask) > table_mask) return 1; /* table overrun */
 
-                /* fill all possible lookups of this symbol with the symbol itself.
-                   Short codes fan out to many table slots (bit_mask can be 2k+);
-                   unroll the store — this is hot when rebuilding MAINTREE. */
-                fill = bit_mask;
-                d = table + leaf;
-                e = d + fill;
-                v = sym;
+            /* fill all possible lookups of this symbol with the symbol itself.
+               Short codes fan out to many table slots (bit_mask can be 2k+);
+               write as packed uint32 pairs — hot when rebuilding MAINTREE. */
+            fill = bit_mask;
+            d = table + leaf;
+            e = d + fill;
+            v = sym;
+            {
+                uint32_t pair = ((uint32_t)v << 16) | (uint32_t)v;
                 while (d + 8 <= e) {
-                    d[0] = v;
-                    d[1] = v;
-                    d[2] = v;
-                    d[3] = v;
-                    d[4] = v;
-                    d[5] = v;
-                    d[6] = v;
-                    d[7] = v;
+                    uint32_t* p = (uint32_t*)(void*)d;
+                    p[0] = pair;
+                    p[1] = pair;
+                    p[2] = pair;
+                    p[3] = pair;
                     d += 8;
                 }
-                while (d < e) *d++ = v;
             }
+            while (d < e) *d++ = v;
         }
         bit_mask >>= 1;
         bit_num++;
@@ -354,7 +410,7 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
     /* if there are any codes longer than nbits */
     if (pos != table_mask) {
         /* clear the remainder of the table */
-        for (sym = pos; sym < table_mask; sym++) table[sym] = 0;
+        for (si = pos; si < table_mask; si++) table[si] = 0;
 
         /* give ourselves room for codes to grow by up to 16 more bits */
         pos <<= 16;
@@ -362,27 +418,27 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
         bit_mask = 1 << 15;
 
         while (bit_num <= 16) {
-            for (sym = 0; sym < nsyms; sym++) {
-                if (length[sym] == bit_num) {
-                    leaf = pos >> 16;
-                    for (fill = 0; fill < bit_num - nbits; fill++) {
-                        /* if this path hasn't been taken yet, 'allocate' two entries */
-                        if (table[leaf] == 0) {
-                            if ((next_symbol << 1) + 1 >= table_elems) {
-                                return 1;
-                            }
-                            table[(next_symbol << 1)] = 0;
-                            table[(next_symbol << 1) + 1] = 0;
-                            table[leaf] = next_symbol++;
+            uint16_t k, end = start[bit_num + 1];
+            for (k = start[bit_num]; k < end; k++) {
+                sym = list[k];
+                leaf = pos >> 16;
+                for (fill = 0; fill < bit_num - nbits; fill++) {
+                    /* if this path hasn't been taken yet, 'allocate' two entries */
+                    if (table[leaf] == 0) {
+                        if ((next_symbol << 1) + 1 >= table_elems) {
+                            return 1;
                         }
-                        /* follow the path and select either left or right for next bit */
-                        leaf = table[leaf] << 1;
-                        if ((pos >> (15 - fill)) & 1) leaf++;
+                        table[(next_symbol << 1)] = 0;
+                        table[(next_symbol << 1) + 1] = 0;
+                        table[leaf] = next_symbol++;
                     }
-                    table[leaf] = sym;
-
-                    if ((pos += bit_mask) > table_mask) return 1; /* table overflow */
+                    /* follow the path and select either left or right for next bit */
+                    leaf = table[leaf] << 1;
+                    if ((pos >> (15 - fill)) & 1) leaf++;
                 }
+                table[leaf] = sym;
+
+                if ((pos += bit_mask) > table_mask) return 1; /* table overflow */
             }
             bit_mask >>= 1;
             bit_num++;
@@ -392,9 +448,9 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
     /* full table? */
     if (pos == table_mask) return 0;
 
-    /* either erroneous table, or all elements are 0 - let's find out. */
-    for (sym = 0; sym < nsyms; sym++)
-        if (length[sym]) return 1;
+    /* either erroneous table, or all elements are 0 */
+    for (si = 1; si <= 16; si++)
+        if (count[si]) return 1;
     return 0;
 }
 
@@ -537,7 +593,8 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                 case LZX_BLOCKTYPE_VERBATIM:
                     READ_LENGTHS(MAINTREE, 0, 256);
                     READ_LENGTHS(MAINTREE, 256, pState->main_elements);
-                    BUILD_TABLE(MAINTREE);
+                    /* only main_elements symbols are used (rest of len[] is 0) */
+                    BUILD_TABLE_NSYMS(MAINTREE, pState->main_elements);
                     if (LENTABLE(MAINTREE)[0xE8] != 0) pState->intel_started = 1;
 
                     READ_LENGTHS(LENGTH, 0, LZX_NUM_SECONDARY_LENGTHS);
@@ -595,11 +652,12 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     uint8_t* main_len = LENTABLE(MAINTREE);
                     uint16_t* length_table = SYMTABLE(LENGTH);
                     uint8_t* length_len = LENTABLE(LENGTH);
+                    uint32_t main_nsyms = pState->main_elements;
                     while (this_run > 0) {
-                        READ_HUFFSYM_LOCAL(main_table, main_len, LZX_MAINTREE_MAXSYMBOLS,
+                        READ_HUFFSYM_LOCAL(main_table, main_len, main_nsyms,
                                            LZX_MAINTREE_TABLEBITS, main_element);
 
-                        if (main_element < LZX_NUM_CHARS) {
+                        if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
                             window[window_posn++] = (uint8_t)main_element;
                             this_run--;
                         } else {
@@ -651,15 +709,9 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                                 runsrc++;
                             }
                             if (match_length > 0) {
-                                if (match_offset >= (uint32_t)match_length) {
-                                    /* Short matches: avoid memcpy call overhead. */
-                                    if ((uint32_t)match_length <= 8) {
-                                        while (match_length-- > 0)
-                                            *rundest++ = *runsrc++;
-                                    } else {
-                                        memcpy(rundest, runsrc, (size_t)match_length);
-                                    }
-                                } else {
+                                if (match_offset >= (uint32_t)match_length)
+                                    lzx_copy_match(rundest, runsrc, match_length);
+                                else {
                                     while (match_length-- > 0)
                                         *rundest++ = *runsrc++;
                                 }
@@ -676,11 +728,12 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     uint8_t* length_len = LENTABLE(LENGTH);
                     uint16_t* aligned_table = SYMTABLE(ALIGNED);
                     uint8_t* aligned_len = LENTABLE(ALIGNED);
+                    uint32_t main_nsyms = pState->main_elements;
                     while (this_run > 0) {
-                        READ_HUFFSYM_LOCAL(main_table, main_len, LZX_MAINTREE_MAXSYMBOLS,
+                        READ_HUFFSYM_LOCAL(main_table, main_len, main_nsyms,
                                            LZX_MAINTREE_TABLEBITS, main_element);
 
-                        if (main_element < LZX_NUM_CHARS) {
+                        if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
                             window[window_posn++] = (uint8_t)main_element;
                             this_run--;
                         } else {
@@ -745,14 +798,9 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                                 runsrc++;
                             }
                             if (match_length > 0) {
-                                if (match_offset >= (uint32_t)match_length) {
-                                    if ((uint32_t)match_length <= 8) {
-                                        while (match_length-- > 0)
-                                            *rundest++ = *runsrc++;
-                                    } else {
-                                        memcpy(rundest, runsrc, (size_t)match_length);
-                                    }
-                                } else {
+                                if (match_offset >= (uint32_t)match_length)
+                                    lzx_copy_match(rundest, runsrc, match_length);
+                                else {
                                     while (match_length-- > 0)
                                         *rundest++ = *runsrc++;
                                 }

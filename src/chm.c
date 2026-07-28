@@ -302,10 +302,31 @@ chm_ctx *chm_ctx_new(chm_alloc_cb alloc, chm_free_cb free_cb,
     return ctx;
 }
 
+/* Free LZX window, block cache, and compressed scratch (kept across chm_close). */
+static void chm_release_decode_resources(chm_ctx *ctx)
+{
+    int i;
+    if (ctx->lzx_state) {
+        LZXteardown(ctx->lzx_state);
+        ctx->lzx_state = NULL;
+    }
+    for (i = 0; i < CHM_MAX_BLOCKS_CACHED; i++) {
+        chm_free(ctx, ctx->cache_blocks[i]);
+        ctx->cache_blocks[i] = NULL;
+        ctx->cache_block_indices[i] = -1;
+    }
+    ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
+    ctx->cache_block_alloc_len = 0;
+    chm_free(ctx, ctx->lzx_cbuffer);
+    ctx->lzx_cbuffer = NULL;
+    ctx->lzx_cbuffer_len = 0;
+}
+
 void chm_ctx_free(chm_ctx *ctx)
 {
     if (ctx) {
         chm_close(ctx);
+        chm_release_decode_resources(ctx);
         ctx->free(ctx->user, NULL, ctx);
     }
 }
@@ -892,6 +913,34 @@ static uint8_t *lzx_cbuffer_ensure(chm_ctx *ctx, uint64_t need)
     return p;
 }
 
+/* Drop cached decode slots if they were allocated for a different block_len
+ * (e.g. reusing a ctx across archives). */
+static void cache_slots_ensure_size(chm_ctx *ctx, uint32_t block_len)
+{
+    int s;
+    if (ctx->cache_block_alloc_len == 0 || ctx->cache_block_alloc_len == block_len)
+        return;
+    for (s = 0; s < CHM_MAX_BLOCKS_CACHED; s++) {
+        chm_free(ctx, ctx->cache_blocks[s]);
+        ctx->cache_blocks[s] = NULL;
+        ctx->cache_block_indices[s] = -1;
+    }
+    ctx->cache_block_alloc_len = 0;
+}
+
+/* Allocate cache slot for block_len if needed. Returns NULL on OOM. */
+static uint8_t *cache_slot_get(chm_ctx *ctx, int indexSlot, uint32_t block_len)
+{
+    cache_slots_ensure_size(ctx, block_len);
+    if (!ctx->cache_blocks[indexSlot]) {
+        ctx->cache_blocks[indexSlot] = (uint8_t *)chm_alloc(ctx, (size_t)block_len);
+        if (!ctx->cache_blocks[indexSlot])
+            return NULL;
+        ctx->cache_block_alloc_len = block_len;
+    }
+    return ctx->cache_blocks[indexSlot];
+}
+
 /* decompress the block.  must have lzx_mutex. */
 static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer) {
     uint8_t* cbuffer;
@@ -904,8 +953,9 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     uint32_t i;                                                  /* local loop index  */
     int ok;
 
-    /* +16: zero padding so LZX ENSURE_BITS can refill without per-byte bounds
-       checks (see lzx.c). block_len + 6144 already oversized vs real frames. */
+    /* LZX_INPUT_PAD zero bytes after the real frame so ENSURE_BITS can refill
+       (16- or 32-bit) without per-byte bounds checks. block_len + 6144 is
+       already oversized vs real frames; pad is within that slack. */
     cbufferLen = ctx->reset_table.block_len + 6144;
     cbuffer = lzx_cbuffer_ensure(ctx, cbufferLen);
     if (!cbuffer) return -1;
@@ -929,23 +979,19 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
                    need the side-effect on the LZX state, but caching it lets a
                    later read of this block skip re-decompression). */
                 indexSlot = (int)(curBlockIdx % ctx->cache_num_blocks);
-                if (!ctx->cache_blocks[indexSlot]) {
-                    ctx->cache_blocks[indexSlot] = (uint8_t *)chm_alloc(ctx, (size_t)ctx->reset_table.block_len);
-                    if (!ctx->cache_blocks[indexSlot]) {
-                        return -1;
-                    }
-                }
+                lbuffer = cache_slot_get(ctx, indexSlot, (uint32_t)ctx->reset_table.block_len);
+                if (!lbuffer)
+                    return -1;
                 ctx->cache_block_indices[indexSlot] = curBlockIdx;
-                lbuffer = ctx->cache_blocks[indexSlot];
 
                 /* decompress the previous block */
                 if (!get_cmpblock_bounds(ctx, curBlockIdx, &cmpStart, &cmpLen) || cmpLen < 0 ||
-                    (uint64_t)cmpLen + 16 > cbufferLen ||
+                    (uint64_t)cmpLen + LZX_INPUT_PAD > cbufferLen ||
                     fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen) {
                     memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
                     return (int64_t)0;
                 }
-                memset(cbuffer + cmpLen, 0, 16);
+                memset(cbuffer + cmpLen, 0, LZX_INPUT_PAD);
                 if (LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen,
                                   (int)ctx->reset_table.block_len) != DECR_OK) {
                     /* Leave a deterministic buffer on failure (CHMLib still
@@ -974,23 +1020,19 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
        before the decode so that, matching CHMLib, a later read of this block is
        served the (partially) decoded buffer even if the decode below fails. */
     indexSlot = (int)(block % ctx->cache_num_blocks);
-    if (!ctx->cache_blocks[indexSlot]) {
-        ctx->cache_blocks[indexSlot] = (uint8_t *)chm_alloc(ctx, (size_t)ctx->reset_table.block_len);
-        if (!ctx->cache_blocks[indexSlot]) {
-            return -1;
-        }
-    }
+    lbuffer = cache_slot_get(ctx, indexSlot, (uint32_t)ctx->reset_table.block_len);
+    if (!lbuffer)
+        return -1;
     ctx->cache_block_indices[indexSlot] = block;
-    lbuffer = ctx->cache_blocks[indexSlot];
     *ubuffer = lbuffer;
 
     ok = get_cmpblock_bounds(ctx, block, &cmpStart, &cmpLen);
-    if (!ok || cmpLen < 0 || (uint64_t)cmpLen + 16 > cbufferLen ||
+    if (!ok || cmpLen < 0 || (uint64_t)cmpLen + LZX_INPUT_PAD > cbufferLen ||
         fetch_bytes(ctx, cbuffer, cmpStart, cmpLen) != cmpLen) {
         memset(lbuffer, 0, (size_t)ctx->reset_table.block_len);
         return (int64_t)0;
     }
-    memset(cbuffer + cmpLen, 0, 16);
+    memset(cbuffer + cmpLen, 0, LZX_INPUT_PAD);
     if (LZXdecompress(ctx->lzx_state, cbuffer, lbuffer, (int)cmpLen,
                       (int)ctx->reset_table.block_len) != DECR_OK) {
         /* Slot is already indexed (matches CHMLib); zero so later reads of this
@@ -1038,19 +1080,28 @@ static int64_t decompress_region(chm_ctx *ctx, uint8_t* buf, uint64_t start, int
     }
 
     /* data request not satisfied, so... start up the decompressor machine */
-    if (!ctx->lzx_state) {
+    {
         /* window_size is a power of two; ffs(x)-1 is its base-2 log. Compute
            it portably (ffs is POSIX-only, absent on MSVC/Windows). */
-        int window_size = 0;
+        int window_bits = 0;
+        uint32_t want_wnd;
         {
             uint32_t w = ctx->window_size;
             while (w > 1) {
                 w >>= 1;
-                window_size++;
+                window_bits++;
             }
         }
-        ctx->lzx_last_block = -1;
-        ctx->lzx_state = LZXinit(window_size);
+        want_wnd = (window_bits > 0) ? (1u << window_bits) : 0;
+        if (!ctx->lzx_state) {
+            ctx->lzx_last_block = -1;
+            ctx->lzx_state = LZXinit(window_bits);
+        } else if (ctx->lzx_state->window_size != want_wnd) {
+            /* previous archive used a different LZX window; rebuild */
+            LZXteardown(ctx->lzx_state);
+            ctx->lzx_last_block = -1;
+            ctx->lzx_state = LZXinit(window_bits);
+        }
     }
 
     /* SumatraPDF: prevent division by zero in decompress_block */
@@ -1299,25 +1350,22 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
     return true;
 }
 
-/* close an ITS archive (clears document state inside ctx, but keeps the ctx itself) */
+/* close an ITS archive (clears document state inside ctx, but keeps the ctx itself).
+ * Decode resources (LZX window, block cache slots, compressed scratch) are kept
+ * for the next chm_open on this ctx — free them in chm_ctx_free. */
 void chm_close(chm_ctx *ctx)
 {
+    int i;
     if (!ctx) return;
-    if (ctx->lzx_state) LZXteardown(ctx->lzx_state);
-    ctx->lzx_state = NULL;
 
-    for (int i = 0; i < CHM_MAX_BLOCKS_CACHED; i++) {
-        chm_free(ctx, ctx->cache_blocks[i]);
-        ctx->cache_blocks[i] = NULL;
+    /* Invalidate cache contents; keep allocated slot buffers. */
+    for (i = 0; i < CHM_MAX_BLOCKS_CACHED; i++)
         ctx->cache_block_indices[i] = -1;
-    }
     ctx->cache_num_blocks = CHM_MAX_BLOCKS_CACHED;
+    ctx->lzx_last_block = -1;
+    /* lzx_state / lzx_cbuffer retained */
 
-    chm_free(ctx, ctx->lzx_cbuffer);
-    ctx->lzx_cbuffer = NULL;
-    ctx->lzx_cbuffer_len = 0;
-
-    /* clear archive fields (keep alloc/free/error/user) */
+    /* clear archive fields (keep alloc/free/error/user + decode buffers) */
     if (ctx->entries) {
         for (int i = 0; i < ctx->entry_count; i++) {
             chm_free(ctx, ctx->entries[i].path);
