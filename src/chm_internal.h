@@ -68,8 +68,19 @@
 
 #define LZX_LENTABLE_SAFETY (64)
 
+/* Decode-table entry packing (uint32):
+ *   terminal: bits[15:0]=symbol, bits[23:16]=code length, bit31=0
+ *   internal node: bit31=1, bits[30:0]=node index
+ * Packing the length into the table saves a second load of tbl_len[] on
+ * every huffman symbol (dominant cost in macOS sample of extract-all). */
+#define LZX_HUFF_NODE ((uint32_t)0x80000000u)
+#define LZX_HUFF_NODE_MASK ((uint32_t)0x7fffffffu)
+#define LZX_HUFF_ENTRY(sym, len) (((uint32_t)(len) << 16) | (uint32_t)(sym))
+#define LZX_HUFF_SYM(e) ((uint32_t)(e) & 0xffffu)
+#define LZX_HUFF_LEN(e) (((uint32_t)(e) >> 16) & 0xffu)
+
 #define LZX_DECLARE_TABLE(tbl) \
-    uint16_t tbl##_table[(1 << LZX_##tbl##_TABLEBITS) + (LZX_##tbl##_MAXSYMBOLS << 1)]; \
+    uint32_t tbl##_table[(1 << LZX_##tbl##_TABLEBITS) + (LZX_##tbl##_MAXSYMBOLS << 1)]; \
     uint8_t tbl##_len[LZX_##tbl##_MAXSYMBOLS + LZX_LENTABLE_SAFETY]
 
 struct LZXstate {

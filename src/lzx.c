@@ -232,47 +232,59 @@ int LZXreset(struct LZXstate* pState) {
         return DECR_ILLEGALDATA;                                                   \
     }
 
-/* READ_HUFFSYM(tablename, var) decodes one huffman symbol from the
- * bitstream using the stated table and puts it in var.
- */
-#define READ_HUFFSYM(tbl, var)                                             \
-    do {                                                                   \
-        ENSURE_BITS(16);                                                   \
-        hufftbl = SYMTABLE(tbl);                                           \
-        if ((i = hufftbl[PEEK_BITS(TABLEBITS(tbl))]) >= MAXSYMBOLS(tbl)) { \
-            uint64_t jb = 1ull << (BITBUF_WIDTH - TABLEBITS(tbl));          \
-            do {                                                           \
-                jb >>= 1;                                                  \
-                i <<= 1;                                                   \
-                i |= (bitbuf & jb) ? 1u : 0u;                              \
-                if (!jb) {                                                 \
-                    return DECR_ILLEGALDATA;                               \
-                }                                                          \
-            } while ((i = hufftbl[i]) >= MAXSYMBOLS(tbl));                 \
-        }                                                                  \
-        j = LENTABLE(tbl)[(var) = i];                                      \
-        REMOVE_BITS(j);                                                    \
+/* Decode one huffman symbol. Table entries pack (len<<16)|sym (terminal) or
+ * LZX_HUFF_NODE|node_id (internal). Long-code walk: each NODE value is a node
+ * id; the next table index is (node_id<<1)|bit — same as classic LZX. */
+#define READ_HUFFSYM(tbl, var)                                                      \
+    do {                                                                            \
+        uint32_t _e;                                                                \
+        ENSURE_BITS(16);                                                            \
+        hufftbl = SYMTABLE(tbl);                                                    \
+        _e = hufftbl[PEEK_BITS(TABLEBITS(tbl))];                                    \
+        if (CHM_UNLIKELY(_e & LZX_HUFF_NODE)) {                                     \
+            uint64_t jb = 1ull << (BITBUF_WIDTH - TABLEBITS(tbl));                   \
+            do {                                                                    \
+                uint32_t node = _e & LZX_HUFF_NODE_MASK;                             \
+                jb >>= 1;                                                           \
+                node = (node << 1) | ((bitbuf & jb) ? 1u : 0u);                     \
+                if (!jb) {                                                          \
+                    return DECR_ILLEGALDATA;                                        \
+                }                                                                   \
+                _e = hufftbl[node];                                                 \
+            } while (_e & LZX_HUFF_NODE);                                           \
+        }                                                                           \
+        (var) = (int)LZX_HUFF_SYM(_e);                                              \
+        j = LZX_HUFF_LEN(_e);                                                       \
+        if (CHM_UNLIKELY(j == 0)) {                                                 \
+            return DECR_ILLEGALDATA;                                                \
+        }                                                                           \
+        REMOVE_BITS(j);                                                             \
     } while (0)
 
-/* Hot-path variants: table/len pointers already in locals (no pState reload).
- * Short codes dominate; mark the long-code walk cold for the branch predictor. */
-#define READ_HUFFSYM_LOCAL(table, lens, maxsym, tablebits, var)                      \
-    do {                                                                             \
-        ENSURE_BITS(16);                                                             \
-        i = (table)[PEEK_BITS(tablebits)];                                           \
-        if (CHM_UNLIKELY(i >= (maxsym))) {                                           \
-            uint64_t jb = 1ull << (BITBUF_WIDTH - (tablebits));                       \
-            do {                                                                     \
-                jb >>= 1;                                                            \
-                i <<= 1;                                                             \
-                i |= (bitbuf & jb) ? 1u : 0u;                                        \
-                if (!jb) {                                                           \
-                    return DECR_ILLEGALDATA;                                         \
-                }                                                                    \
-            } while ((i = (table)[i]) >= (maxsym));                                  \
-        }                                                                            \
-        j = (lens)[(var) = i];                                                       \
-        REMOVE_BITS(j);                                                              \
+/* Hot path: table pointer already in a local (length is packed into entries). */
+#define READ_HUFFSYM_LOCAL(table, tablebits, var)                                   \
+    do {                                                                            \
+        uint32_t _e;                                                                \
+        ENSURE_BITS(16);                                                            \
+        _e = (table)[PEEK_BITS(tablebits)];                                         \
+        if (CHM_UNLIKELY(_e & LZX_HUFF_NODE)) {                                     \
+            uint64_t jb = 1ull << (BITBUF_WIDTH - (tablebits));                      \
+            do {                                                                    \
+                uint32_t node = _e & LZX_HUFF_NODE_MASK;                             \
+                jb >>= 1;                                                           \
+                node = (node << 1) | ((bitbuf & jb) ? 1u : 0u);                     \
+                if (!jb) {                                                          \
+                    return DECR_ILLEGALDATA;                                        \
+                }                                                                   \
+                _e = (table)[node];                                                 \
+            } while (_e & LZX_HUFF_NODE);                                           \
+        }                                                                           \
+        (var) = (int)LZX_HUFF_SYM(_e);                                              \
+        j = LZX_HUFF_LEN(_e);                                                       \
+        if (CHM_UNLIKELY(j == 0)) {                                                 \
+            return DECR_ILLEGALDATA;                                                \
+        }                                                                           \
+        REMOVE_BITS(j);                                                             \
     } while (0)
 
 /* Non-overlapping match copy: word-sized stores beat byte loops and avoid
@@ -333,7 +345,7 @@ static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM
  * Returns 0 for OK or 1 for error
  */
 
-static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, uint16_t* table) {
+static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, uint32_t* table) {
     uint16_t sym;
     uint32_t leaf;
     uint8_t bit_num;
@@ -374,32 +386,26 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
     while (bit_num <= nbits) {
         uint16_t k, end = start[bit_num + 1];
         for (k = start[bit_num]; k < end; k++) {
-            uint16_t* d;
-            uint16_t* e;
-            uint16_t v;
+            uint32_t* d;
+            uint32_t* e;
+            uint32_t v;
 
             sym = list[k];
             leaf = pos;
 
             if ((pos += bit_mask) > table_mask) return 1; /* table overrun */
 
-            /* fill all possible lookups of this symbol with the symbol itself.
-               Short codes fan out to many table slots (bit_mask can be 2k+);
-               write as packed uint32 pairs — hot when rebuilding MAINTREE. */
+            /* Pack (len<<16)|sym — one load at decode time instead of table+len. */
             fill = bit_mask;
             d = table + leaf;
             e = d + fill;
-            v = sym;
-            {
-                uint32_t pair = ((uint32_t)v << 16) | (uint32_t)v;
-                while (d + 8 <= e) {
-                    uint32_t* p = (uint32_t*)(void*)d;
-                    p[0] = pair;
-                    p[1] = pair;
-                    p[2] = pair;
-                    p[3] = pair;
-                    d += 8;
-                }
+            v = LZX_HUFF_ENTRY(sym, bit_num);
+            while (d + 4 <= e) {
+                d[0] = v;
+                d[1] = v;
+                d[2] = v;
+                d[3] = v;
+                d += 4;
             }
             while (d < e) *d++ = v;
         }
@@ -430,13 +436,13 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
                         }
                         table[(next_symbol << 1)] = 0;
                         table[(next_symbol << 1) + 1] = 0;
-                        table[leaf] = next_symbol++;
+                        table[leaf] = LZX_HUFF_NODE | next_symbol++;
                     }
                     /* follow the path and select either left or right for next bit */
-                    leaf = table[leaf] << 1;
+                    leaf = (table[leaf] & LZX_HUFF_NODE_MASK) << 1;
                     if ((pos >> (15 - fill)) & 1) leaf++;
                 }
-                table[leaf] = sym;
+                table[leaf] = LZX_HUFF_ENTRY(sym, length[sym]);
 
                 if ((pos += bit_mask) > table_mask) return 1; /* table overflow */
             }
@@ -458,7 +464,7 @@ int LZX_test_pretree_make_decode_table(void) {
     uint32_t nsyms = LZX_PRETREE_MAXSYMBOLS;
     uint32_t nbits = LZX_PRETREE_TABLEBITS;
     uint32_t table_elems = (1 << nbits) + (nsyms << 1);
-    uint16_t* table = (uint16_t*)calloc(table_elems, sizeof(uint16_t));
+    uint32_t* table = (uint32_t*)calloc(table_elems, sizeof(uint32_t));
     uint8_t* length = (uint8_t*)malloc(nsyms);
     uint32_t i;
 
@@ -486,13 +492,13 @@ struct lzx_bits {
 };
 
 static int lzx_read_lens(struct LZXstate* pState, uint8_t* lens, uint32_t first, uint32_t last, struct lzx_bits* lb) {
-    uint32_t i, j, x, y;
+    uint32_t j, x, y;
     int z;
 
     uint64_t bitbuf = lb->bb;
     int bitsleft = lb->bl;
     uint8_t* inpos = lb->ip;
-    uint16_t* hufftbl;
+    uint32_t* hufftbl;
     (void)lb->end; /* padding handles over-read; end kept for API symmetry */
 
     for (x = 0; x < 20; x++) {
@@ -547,7 +553,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
 
     uint64_t bitbuf;
     int bitsleft;
-    uint32_t match_offset, i, j, k; /* ijk used in READ_HUFFSYM macro */
+    uint32_t match_offset, i, j, k; /* i/j/k temps; j also used by READ_HUFFSYM */
     struct lzx_bits lb;            /* used in READ_LENGTHS macro */
 
     int togo = outlen, this_run, main_element, aligned_bits;
@@ -648,14 +654,10 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                 case LZX_BLOCKTYPE_VERBATIM: {
                     /* Cache table bases — the old macro reloaded pState fields
                        on every symbol (~one symbol per output byte). */
-                    uint16_t* main_table = SYMTABLE(MAINTREE);
-                    uint8_t* main_len = LENTABLE(MAINTREE);
-                    uint16_t* length_table = SYMTABLE(LENGTH);
-                    uint8_t* length_len = LENTABLE(LENGTH);
-                    uint32_t main_nsyms = pState->main_elements;
+                    uint32_t* main_table = SYMTABLE(MAINTREE);
+                    uint32_t* length_table = SYMTABLE(LENGTH);
                     while (this_run > 0) {
-                        READ_HUFFSYM_LOCAL(main_table, main_len, main_nsyms,
-                                           LZX_MAINTREE_TABLEBITS, main_element);
+                        READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, main_element);
 
                         if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
                             window[window_posn++] = (uint8_t)main_element;
@@ -665,8 +667,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
 
                             match_length = main_element & LZX_NUM_PRIMARY_LENGTHS;
                             if (match_length == LZX_NUM_PRIMARY_LENGTHS) {
-                                READ_HUFFSYM_LOCAL(length_table, length_len,
-                                                   LZX_LENGTH_MAXSYMBOLS, LZX_LENGTH_TABLEBITS,
+                                READ_HUFFSYM_LOCAL(length_table, LZX_LENGTH_TABLEBITS,
                                                    length_footer);
                                 match_length += length_footer;
                             }
@@ -722,16 +723,11 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                 }
 
                 case LZX_BLOCKTYPE_ALIGNED: {
-                    uint16_t* main_table = SYMTABLE(MAINTREE);
-                    uint8_t* main_len = LENTABLE(MAINTREE);
-                    uint16_t* length_table = SYMTABLE(LENGTH);
-                    uint8_t* length_len = LENTABLE(LENGTH);
-                    uint16_t* aligned_table = SYMTABLE(ALIGNED);
-                    uint8_t* aligned_len = LENTABLE(ALIGNED);
-                    uint32_t main_nsyms = pState->main_elements;
+                    uint32_t* main_table = SYMTABLE(MAINTREE);
+                    uint32_t* length_table = SYMTABLE(LENGTH);
+                    uint32_t* aligned_table = SYMTABLE(ALIGNED);
                     while (this_run > 0) {
-                        READ_HUFFSYM_LOCAL(main_table, main_len, main_nsyms,
-                                           LZX_MAINTREE_TABLEBITS, main_element);
+                        READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, main_element);
 
                         if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
                             window[window_posn++] = (uint8_t)main_element;
@@ -741,8 +737,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
 
                             match_length = main_element & LZX_NUM_PRIMARY_LENGTHS;
                             if (match_length == LZX_NUM_PRIMARY_LENGTHS) {
-                                READ_HUFFSYM_LOCAL(length_table, length_len,
-                                                   LZX_LENGTH_MAXSYMBOLS, LZX_LENGTH_TABLEBITS,
+                                READ_HUFFSYM_LOCAL(length_table, LZX_LENGTH_TABLEBITS,
                                                    length_footer);
                                 match_length += length_footer;
                             }
@@ -757,14 +752,12 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                                     extra -= 3;
                                     READ_BITS(verbatim_bits, extra);
                                     match_offset += ((uint32_t)verbatim_bits << 3);
-                                    READ_HUFFSYM_LOCAL(aligned_table, aligned_len,
-                                                       LZX_ALIGNED_MAXSYMBOLS,
-                                                       LZX_ALIGNED_TABLEBITS, aligned_bits);
+                                    READ_HUFFSYM_LOCAL(aligned_table, LZX_ALIGNED_TABLEBITS,
+                                                       aligned_bits);
                                     match_offset += (uint32_t)aligned_bits;
                                 } else if (extra == 3) {
-                                    READ_HUFFSYM_LOCAL(aligned_table, aligned_len,
-                                                       LZX_ALIGNED_MAXSYMBOLS,
-                                                       LZX_ALIGNED_TABLEBITS, aligned_bits);
+                                    READ_HUFFSYM_LOCAL(aligned_table, LZX_ALIGNED_TABLEBITS,
+                                                       aligned_bits);
                                     match_offset += (uint32_t)aligned_bits;
                                 } else if (extra > 0) {
                                     READ_BITS(verbatim_bits, extra);
