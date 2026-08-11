@@ -47,8 +47,8 @@ bun cmd/fuzz.ts           # libFuzzer (seeded from testfiles/chm)
 bun cmd/fuzz.ts -check-crashes  # replay fuzz/crashes/* under ASan (CI)
 ```
 
-CI (GitHub Actions): `.github/workflows/ci.yml` — Windows/Linux smoke + amalgamation,
-fuzz crash regression, WASM open/list.
+CI (GitHub Actions): `.github/workflows/ci.yml` — Windows/Linux/macOS smoke +
+CHMLib oracle tests + amalgamation, fuzz crash regression, WASM open/list.
 
 CLI:
 ```

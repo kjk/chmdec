@@ -63,10 +63,11 @@ in sync with `..\winperf\client\winperf_control.h`.
   (bootstraps `deps/emsdk` if `emcc` is missing; `-clean` wipes/reinstalls emsdk)
 - `bun cmd/verify-wasm.ts <file.chm>` — open/list smoke via the wasm glue (CI)
 - `bun cmd/run-wasm-demo.ts` — serve dist/wasm (optional `-build`, `-port N`)
-- GitHub Actions: `.github/workflows/ci.yml` (Windows clang smoke + amalgamation,
-  Windows ASan crash regression, Linux clang smoke + amalgamation + UBSan
-  crashes, WASM open/list smoke). Full `tests.ts` / CHMLib oracle stays local
-  (needs `testfiles/chm`, gitignored).
+- GitHub Actions: `.github/workflows/ci.yml` (Windows clang + smoke + CHMLib
+  oracle + amalgamation, Windows ASan crash regression, Linux clang + smoke +
+  oracle + amalgamation + UBSan crashes, macOS clang + smoke + oracle +
+  amalgamation, WASM open/list smoke). `testfiles/` is cached per OS; CI runs
+  `bun cmd/tests.ts` then `bun cmd/test.ts testfiles/chm`.
 
 No heavy C++ oracle like djvudec; correctness is by enumeration + roundtrip retrieve on known good .chm files + fuzz.
 
@@ -104,7 +105,10 @@ enough hits. Marks are no-ops when not running under `winperf record`.
 ## Amalgamation rules
 - dist/ is generated. Do not edit dist/ directly.
 - After src/ changes, run build-dist.ts before publishing a drop-in.
-- dist/chm.c is single TU: pub header + internal + lzx.c + chm.c with local #includes stripped.
+- dist/chm.c is single TU: pub header + internal + lzx.c + chm.c with local
+  #includes stripped, comments removed, **LF only**, trailing whitespace
+  stripped, and at most one blank line in a row.
+- **Agents do not commit dist/** unless the user asks.
 
 ## Fuzzing
 Crashes go to `fuzz/crashes/` (commit them as seeds). Use `-repro FILE` to

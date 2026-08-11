@@ -22,7 +22,31 @@ function stripLocalIncludes(text: string): string {
   return text.replace(/^[ \t]*#[ \t]*include[ \t]+"(?:chm\.h|chm_internal\.h|lzx\.h)"[ \t]*\r?\n/gm, "");
 }
 
+/** LF only, strip trailing whitespace, at most one blank line in a row. */
+function normalizeSourceText(text: string): string {
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const out: string[] = [];
+  let blank = false;
+  for (const raw of lines) {
+    const line = raw.replace(/[ \t]+$/, "");
+    if (line.length === 0) {
+      if (blank) continue;
+      blank = true;
+      out.push("");
+    } else {
+      blank = false;
+      out.push(line);
+    }
+  }
+  // Drop leading blank lines; keep a single trailing newline.
+  while (out.length > 0 && out[0] === "") out.shift();
+  while (out.length > 0 && out[out.length - 1] === "") out.pop();
+  return out.length === 0 ? "\n" : out.join("\n") + "\n";
+}
+
 function stripCComments(code: string): string {
+  // Normalize EOLs first so comment/blank handling never sees CRLF.
+  code = code.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   let out = "";
   let i = 0;
   const n = code.length;
@@ -54,19 +78,7 @@ function stripCComments(code: string): string {
       out += c; i++;
     }
   }
-  return out;
-}
-
-function stripTrailingWS(s: string): string {
-  // Always emit LF. Collapse 2+ consecutive blank lines to one; drop leading
-  // blanks (from stripped headers); end with a single trailing newline.
-  return s
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^\n+/, "")
-    .replace(/\n+$/, "\n");
+  return normalizeSourceText(out);
 }
 
 // Always regenerate and re-verify the amalgamation. mtime-based caching risked
@@ -78,7 +90,7 @@ export async function ensureDist() {
 export async function buildDist() {
   mkdirSync(DIST, { recursive: true });
 
-  const pub = readFileSync(join(SRC, "chm.h"), "utf8");
+  const pub = normalizeSourceText(readFileSync(join(SRC, "chm.h"), "utf8"));
 
   let body = "";
   for (const m of MODULES) {
@@ -91,11 +103,10 @@ export async function buildDist() {
   let intH = readFileSync(join(SRC, "chm_internal.h"), "utf8");
   intH = stripLocalIncludes(intH);
 
-  let amalgam = pub + "\n" + intH + "\n" + body;
-  amalgam = stripCComments(amalgam);
-  amalgam = stripTrailingWS(amalgam);
+  // Final pass also collapses blank runs left at module boundaries.
+  const amalgam = stripCComments(pub + "\n" + intH + "\n" + body);
 
-  writeFileSync(DIST_H, stripTrailingWS(pub));
+  writeFileSync(DIST_H, pub);
   writeFileSync(DIST_C, amalgam);
 
   // verify compiles

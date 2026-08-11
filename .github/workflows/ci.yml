@@ -1,8 +1,10 @@
-# CI for chmdec — build, amalgamation, sample smoke, fuzz crash regression, WASM.
+# CI for chmdec — host build, amalgamation, corpus smoke + CHMLib oracle tests
+# on Windows, Linux, and macOS, plus fuzz crash regression and WASM.
 #
-# Full local corpus (testfiles/chm) is optional/gitignored; CI uses tracked
-# fuzz/crashes samples that open cleanly for smoke, and replays the full
-# crash suite under ASan. Keep the feedback loop under ~15 min.
+# `bun cmd/tests.ts` downloads public samples into testfiles/chm (gitignored)
+# and lists every file. `bun cmd/test.ts testfiles/chm` byte-compares extraction
+# against vendored CHMLib. testfiles/ is cached per OS so cold runs pay download
+# once.
 name: ci
 
 on:
@@ -20,7 +22,7 @@ env:
 
 jobs:
   windows-clang:
-    name: Windows clang + smoke
+    name: Windows clang + tests
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -30,15 +32,17 @@ jobs:
           bun-version: latest
       - name: MSVC environment (clang from VS)
         uses: ilammy/msvc-dev-cmd@v1
-      - name: Build harness
-        run: bun cmd/build.ts
-      - name: Smoke (list sample that opens cleanly)
+      - name: Cache test corpus
+        uses: actions/cache@v4
+        with:
+          path: testfiles
+          key: testfiles-v1-windows-${{ hashFiles('cmd/get-deps.ts') }}
+          restore-keys: |
+            testfiles-v1-windows-
+      - name: Smoke + CHMLib oracle tests
         run: |
-          $h = "out/clang/chm_test.exe"
-          & $h -list fuzz/crashes/crash-uninit-lzx.chm
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $h -list fuzz/crashes/crash-70811c9a8c0dfca84706b3825d0fa63f4db58e5a
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun cmd/tests.ts
+          bun cmd/test.ts testfiles/chm
       - name: Amalgamation
         run: bun cmd/build-dist.ts
 
@@ -57,7 +61,7 @@ jobs:
         run: bun cmd/fuzz.ts -check-crashes
 
   linux:
-    name: Linux clang + amalgamation + crashes
+    name: Linux clang + tests + crashes
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -73,20 +77,47 @@ jobs:
           major=$(clang -dumpversion | cut -d. -f1)
           sudo apt-get install -y "libfuzzer-${major}-dev" || \
             sudo apt-get install -y "libclang-rt-${major}-dev" || true
-      - name: Build clang harness
-        run: bun cmd/build.ts
-      - name: Smoke (list sample that opens cleanly)
+      - name: Cache test corpus
+        uses: actions/cache@v4
+        with:
+          path: testfiles
+          key: testfiles-v1-linux-${{ hashFiles('cmd/get-deps.ts') }}
+          restore-keys: |
+            testfiles-v1-linux-
+      - name: Smoke + CHMLib oracle tests
         run: |
-          H=out/clang/chm_test
-          test -x "$H"
-          "$H" -list fuzz/crashes/crash-uninit-lzx.chm
-          "$H" -list fuzz/crashes/crash-70811c9a8c0dfca84706b3825d0fa63f4db58e5a
+          bun cmd/tests.ts
+          bun cmd/test.ts testfiles/chm
       - name: Amalgamation
         run: bun cmd/build-dist.ts
       - name: Fuzz crashes (ASan + UBSan)
         env:
           CHM_FUZZ_UBSAN: "1"
         run: bun cmd/fuzz.ts -check-crashes
+
+  macos:
+    name: macOS clang + tests
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache test corpus
+        uses: actions/cache@v4
+        with:
+          path: testfiles
+          key: testfiles-v1-macos-${{ hashFiles('cmd/get-deps.ts') }}
+          restore-keys: |
+            testfiles-v1-macos-
+      - name: Smoke + CHMLib oracle tests
+        # Apple clang is on the runner.
+        run: |
+          bun cmd/tests.ts
+          bun cmd/test.ts testfiles/chm
+      - name: Amalgamation
+        run: bun cmd/build-dist.ts
 
   wasm:
     name: WASM open/list smoke
@@ -101,5 +132,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
+      - name: Cache emsdk
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: deps-v1-linux-wasm-${{ hashFiles('cmd/build-wasm.ts') }}
+          restore-keys: |
+            deps-v1-linux-wasm-
       - name: Build amalgamation + WASM + verify
         run: bun cmd/verify-wasm.ts fuzz/crashes/crash-uninit-lzx.chm
