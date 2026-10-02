@@ -15,6 +15,14 @@ async function main() {
     console.error("no .chm files under testfiles/chm (run: bun cmd/get-deps.ts)");
     process.exit(1);
   }
+  const wrap = await $`${exe} -lzx-wrap`.cwd(ROOT).nothrow();
+  if (wrap.exitCode !== 0) {
+    console.error(wrap.stderr.toString());
+    console.error("FAIL lzx-wrap");
+    process.exit(1);
+  }
+  console.log("OK lzx-wrap");
+
   console.log(`testing ${files.length} chm files`);
   let passed = 0, failed = 0;
   for (const f of files) {
