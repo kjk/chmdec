@@ -94,6 +94,7 @@ struct LZXstate {
     uint16_t block_type;
     uint32_t block_length;
     uint32_t block_remaining;
+    uint32_t overrun; /* bytes a match decoded past the end of the last frame */
     uint32_t frames_read;
     int32_t intel_filesize;
     int32_t intel_curpos;

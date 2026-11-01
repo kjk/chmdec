@@ -133,6 +133,7 @@ struct LZXstate* LZXinit(int window) {
     pState->header_read = 0;
     pState->frames_read = 0;
     pState->block_remaining = 0;
+    pState->overrun = 0;
     pState->block_type = LZX_BLOCKTYPE_INVALID;
     pState->intel_curpos = 0;
     pState->intel_started = 0;
@@ -157,6 +158,7 @@ int LZXreset(struct LZXstate* pState) {
     pState->header_read = 0;
     pState->frames_read = 0;
     pState->block_remaining = 0;
+    pState->overrun = 0;
     pState->block_type = LZX_BLOCKTYPE_INVALID;
     pState->intel_curpos = 0;
     pState->intel_started = 0;
@@ -556,7 +558,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
     uint32_t match_offset, i, j, k; /* i/j/k temps; j also used by READ_HUFFSYM */
     struct lzx_bits lb;            /* used in READ_LENGTHS macro */
 
-    int togo = outlen, this_run, main_element, aligned_bits;
+    int togo = outlen - (int)pState->overrun, this_run, main_element, aligned_bits;
     int match_length, length_footer, extra, verbatim_bits;
 
     INIT_BITSTREAM;
@@ -813,14 +815,23 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                 default:
                     return DECR_ILLEGALDATA; /* might as well */
             }
+
+            /* a match can run past the frame end: its tail starts the next frame */
+            if (this_run < 0) {
+                uint32_t over = (uint32_t)-this_run;
+                togo -= (int)over;
+                pState->block_remaining -= over < pState->block_remaining ? over : pState->block_remaining;
+            }
         }
     }
 
-    if (togo != 0) return DECR_ILLEGALDATA;
+    if (togo > 0) return DECR_ILLEGALDATA;
+    pState->overrun = (uint32_t)-togo;
     /* Ring buffer: a frame that crosses the end is [size - head, size) then [0, end). */
     if (outlen < 0 || (uint32_t)outlen > window_size || window_posn > window_size) return DECR_ILLEGALDATA;
     {
-        uint32_t end = window_posn ? window_posn : window_size;
+        uint32_t end = (window_posn + window_size - pState->overrun) & (window_size - 1);
+        if (!end) end = window_size;
         if ((uint32_t)outlen <= end) {
             memcpy(outpos, window + (end - (uint32_t)outlen), (size_t)outlen);
         } else {
