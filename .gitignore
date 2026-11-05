@@ -1,34 +1,17 @@
 # build outputs (harness objects + exes)
 out/
-# render mismatch dumps (verify_diffs/ from -verify-render)
-verify_diffs/
 *.lib
 *.exp
 *.pdb
-# reference tools are rebuilt from DjVuLibre by build.ts
-ref_build/
-# upstream reference checkouts (cloned by cmd/get_deps.ts)
-deps/
-# local test corpora (copied in, not part of the repo)
-testfiles/
-# verifier failure list (written by cmd/tests.ts)
-failures.txt
-# feature scan output (cmd/dump_features.ts)
-features.jsonl
-features_summary.txt
-# scratch render/text outputs
-*.pnm
-*.pgm
-*.ppm
-*.pbm
 *.ilk
-/terminals
+# emsdk and other tools fetched by cmd/build-wasm.ts
+deps/
+# local test corpus (filled by cmd/get-deps.ts)
+testfiles/
 # fuzzing
 fuzz/corpus/
 fuzz/corpus.min/
 fuzz/*.log
-
-# chm test corpus (add your own .chm files)
-testfiles/chm/
 /fuzz/minimized
 /fuzz-0.log
+/terminals

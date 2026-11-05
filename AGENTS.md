@@ -6,18 +6,23 @@ Plain-C, read-only CHM/ITSS archive library. Ported/cleaned from CHMLib (Jed Win
 Read-only. Caller hands the entire .chm as an in-memory buffer.
 We provide:
 - open / close
-- chm_entry (start, length, is_compressed, is_dir/is_file, is_normal/is_meta/is_special, path)
+- chm_entry (start, length, space = raw content-section index, is_compressed, is_dir/is_file, is_normal/is_meta/is_special, path)
 - retrieve bytes for an entry
 - get all entries (files/dirs/meta)
 
 No writers. No FS I/O.
 
 ## Layout (mimics djvudec)
-- src/chm.h            — public API (ctx + chmFile opaque, chm_entry, resolve/retrieve/enumerate)
+- src/chm.h            — public API: opaque chm_ctx (holds the archive state; no separate chmFile),
+                         chm_ctx_new/free, chm_open/close, struct chm_entry, chm_get_entries,
+                         chm_read_entry. Path lookup (chm_resolve_entry) is internal; there is no
+                         enumerate callback API — entries are collected at open time.
 - src/chm_internal.h   — one internal header with structs, helpers, LZX
 - src/chm.c            — main logic
 - src/lzx.c            — LZX decompressor
 - cmd/*.ts             — bun build/dist/fuzz/tests/...
+- cmd/our-dump.c       — chmdec dumper used by cmd/test.ts, cmd/chm-info.ts, cmd/bench.ts
+- cmd/chm-info.ts      — list a CHM's entries via chmdec or CHMLib (`-chmlib`)
 - dist/                — amalgamation (chm.h/c) + optional dist/wasm/
 - cmd/wasm-demo.html   — browser demo source (copied to dist/wasm/demo.html)
 - cmd/chm_wasm_api.c   — thin JS-friendly wasm exports
@@ -52,8 +57,9 @@ in sync with `..\winperf\client\winperf_control.h`.
 - `bun cmd/tests.ts` — runs smoke on testfiles/chm/*.chm (calls get-deps first)
 - `bun cmd/bench.ts <file.chm … | -rand N | -all>` — open/extract-all/close vs CHMLib
   (compact `chmlib chmdec diff %diff file` lines; best-of-3 each side)
-- `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies clang -c
-  (also rebuilds the wasm drop when run as main)
+- `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies with
+  `clang -fsyntax-only`, then always rebuilds dist/wasm (bootstraps emsdk if
+  needed). For dist only: `bun -e 'await (await import("./cmd/build-dist.ts")).buildDist()'`
 - `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint.
   Flags: `-jobs N`, `-repro FILE`, `-check-crashes` (CI: replay all
   `fuzz/crashes/*`, expect exit 0), `-minimize`, `-max-len N`. Linux/macOS CI may
@@ -69,7 +75,9 @@ in sync with `..\winperf\client\winperf_control.h`.
   amalgamation, WASM open/list smoke). `testfiles/` is cached per OS; CI runs
   `bun cmd/tests.ts` then `bun cmd/test.ts testfiles/chm`.
 
-No heavy C++ oracle like djvudec; correctness is by enumeration + roundtrip retrieve on known good .chm files + fuzz.
+Correctness: `bun cmd/test.ts [-rand N] <file.chm|dir>` byte-compares every
+entry's metadata and content against the vendored CHMLib oracle (test/CHMLib);
+plus smoke enumeration over testfiles/chm and fuzzing.
 
 ### Windows sampling profiles (winperf)
 
@@ -93,7 +101,8 @@ bun cmd/build.ts
 enough hits. Marks are no-ops when not running under `winperf record`.
 
 ## Coding style (strict)
-- Follow djvudec exactly: header comment `/* name -- desc */`
+- New files: header comment `/* name -- desc */`. src/chm.c and src/lzx.c keep
+  their original CHMLib banner + license comment; do not remove it.
 - chm_ prefix
 - ctx for alloc/error (djvudec/jbig2dec)
 - internal.h declares shared structs + non-file-local funcs
@@ -108,6 +117,8 @@ enough hits. Marks are no-ops when not running under `winperf record`.
 - dist/chm.c is single TU: pub header + internal + lzx.c + chm.c with local
   #includes stripped, comments removed, **LF only**, trailing whitespace
   stripped, and at most one blank line in a row.
+- dist/chm.h and dist/chm.c start with the LGPL license header (`LICENSE_HEADER`
+  in cmd/build-dist.ts), since comment stripping drops the src/ license banners.
 - **Agents do not commit dist/** unless the user asks.
 
 ## Fuzzing

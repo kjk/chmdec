@@ -26,7 +26,10 @@ for (int i = 0; i < n; i++) {
     if (strcmp(entries[i]->path, "/foo/bar.html") == 0) {
         uint8_t *buf = malloc(entries[i]->length);
         if (buf) {
-            chm_read_entry(ctx, entries[i], buf);
+            int64_t n_read = chm_read_entry(ctx, entries[i], buf);
+            if (n_read == (int64_t)entries[i]->length) {
+                /* use buf; a short count means corrupt data */
+            }
             free(buf);
         }
         break;
@@ -38,13 +41,15 @@ chm_ctx_free(ctx);
 
 ## Dev build & test
 
-For dev, we require bun and use msvc and clang as C compilers.
+For dev, we require bun and use clang as the C compiler (on Windows, the clang
+bundled with Visual Studio).
 
 ```
-bun cmd/build.ts          # builds out/clang/chm_test
+bun cmd/build.ts          # builds out/clang/chm_test + out/clang/chm_bench
 bun cmd/get-deps.ts       # download public .chm samples → testfiles/chm
 bun cmd/tests.ts          # smoke tests over testfiles/chm (auto get-deps)
-bun cmd/build-dist.ts     # updates dist/chm.{h,c} (+ wasm when run as main)
+bun cmd/test.ts testfiles/chm  # byte-compare extraction vs vendored CHMLib (-rand N)
+bun cmd/build-dist.ts     # updates dist/chm.{h,c}, then rebuilds dist/wasm (needs emsdk)
 bun cmd/build-wasm.ts     # dist/wasm/chm.js + chm.wasm + demo.html (bootstraps emsdk if needed)
 bun cmd/verify-wasm.ts f.chm  # open/list through the wasm glue (CI)
 bun cmd/run-wasm-demo.ts  # serve the browser demo
@@ -57,7 +62,8 @@ CHMLib oracle tests + amalgamation, fuzz crash regression, WASM open/list.
 
 CLI:
 ```
-chm_test -list file.chm
+chm_test [-list] file.chm   # open (and with -list, list entries)
+chm_test -lzx-wrap          # LZX wrap-around self-test
 ```
 
 ## How it was made
@@ -66,4 +72,4 @@ Port of CHMLib (from SumatraPDF's ext/CHMLib) cleaned up coding conventions, wit
 
 ## License
 
-See LICENSE.md (LGPL-ish origin from CHMLib, adapted).
+LGPL-2.1-or-later, inherited from CHMLib. See [LICENSE.md](LICENSE.md).

@@ -2,8 +2,8 @@
 //
 //   bun cmd/build-dist.ts
 //
-// dist/chm.h : copy of src/chm.h
-// dist/chm.c : src/chm.h + src/chm_internal.h + src/lzx.c + src/chm.c (with local includes stripped)
+// dist/chm.h : license header + copy of src/chm.h
+// dist/chm.c : license header + src/chm.h + src/chm_internal.h + src/lzx.c + src/chm.c (with local includes stripped)
 import { $ } from "bun";
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
@@ -16,6 +16,22 @@ export const DIST_H = join(DIST, "chm.h");
 export const DIST_C = join(DIST, "chm.c");
 
 const MODULES = ["lzx.c", "chm.c"];
+
+// License notice prepended to dist/chm.h and dist/chm.c. stripCComments removes
+// the per-file license banners from src/, so the amalgamation needs its own.
+const LICENSE_HEADER = `/* chmdec -- plain-C CHM reader. https://github.com/kjk/chmdec
+ *
+ * Derived from CHMLib by Jed Wing <jedwin@ugcs.caltech.edu>. The LZX
+ * decompressor derives from cabextract by Stuart Caie, who granted permission
+ * to re-license it under the LGPL for CHMLib.
+ * Changes Copyright (c) 2026 Krzysztof Kowalczyk.
+ *
+ * This library is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or (at
+ * your option) any later version. See LICENSE.md.
+ */
+`;
 
 function stripLocalIncludes(text: string): string {
   // remove #include "chm.h" and #include "chm_internal.h" and old "lzx.h"
@@ -106,8 +122,8 @@ export async function buildDist() {
   // Final pass also collapses blank runs left at module boundaries.
   const amalgam = stripCComments(pub + "\n" + intH + "\n" + body);
 
-  writeFileSync(DIST_H, pub);
-  writeFileSync(DIST_C, amalgam);
+  writeFileSync(DIST_H, LICENSE_HEADER + "\n" + pub);
+  writeFileSync(DIST_C, LICENSE_HEADER + "\n" + amalgam);
 
   // verify compiles
   const tmp = join(DIST, "chk.c");
