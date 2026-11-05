@@ -1,6 +1,6 @@
 # chmdec — a plain-C CHM reader
 
-This is a CHM / ITSS archive reader, ported and cleaned from [CHMLib](https://github.com/jedwing/CHMLib).
+This is a [CHM](https://fileformats.dev/chm) / ITSS archive reader, ported and cleaned from [CHMLib](https://github.com/jedwing/CHMLib).
 
 * plain C, no dependencies
 * wasm build to be used in web apps
@@ -15,8 +15,12 @@ This is a CHM / ITSS archive reader, ported and cleaned from [CHMLib](https://gi
 See `src/chm.h`. Basic usage:
 
 ```c
-chm_ctx *ctx = chm_open(NULL, data, len);   /* data must outlive ctx */
-struct chm_entry **entries = NULL;
+chm_ctx *ctx = chm_ctx_new(NULL, NULL, NULL, NULL);  /* default malloc/free, no error cb */
+if (!chm_open(ctx, data, len)) {             /* data must stay valid until chm_close */
+    chm_ctx_free(ctx);
+    return;
+}
+struct chm_entry **entries = NULL;           /* owned by ctx */
 int n = chm_get_entries(ctx, &entries);
 for (int i = 0; i < n; i++) {
     if (strcmp(entries[i]->path, "/foo/bar.html") == 0) {
@@ -29,6 +33,7 @@ for (int i = 0; i < n; i++) {
     }
 }
 chm_close(ctx);
+chm_ctx_free(ctx);
 ```
 
 ## Dev build & test
