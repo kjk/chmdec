@@ -960,8 +960,14 @@ static int64_t decompress_block(chm_ctx *ctx, uint64_t block, uint8_t** ubuffer)
     cbuffer = lzx_cbuffer_ensure(ctx, cbufferLen);
     if (!cbuffer) return -1;
 
-    /* let the caching system pull its weight! */
-    if (block - blockAlign <= ctx->lzx_last_block && block >= ctx->lzx_last_block) blockAlign = (block - ctx->lzx_last_block);
+    /* let the caching system pull its weight! If the decoder last decoded a
+       block of this reset interval at or before `block`, catch up from there
+       instead of from the interval start. lzx_last_block is -1 when the
+       decoder holds no block of the open archive. */
+    if (ctx->lzx_last_block >= 0) {
+        uint64_t last = (uint64_t)ctx->lzx_last_block;
+        if (block - blockAlign <= last && block >= last) blockAlign = (uint32_t)(block - last);
+    }
 
     /* check if we need previous blocks */
     if (blockAlign != 0) {
@@ -1397,7 +1403,9 @@ void chm_close(chm_ctx *ctx)
     ctx->window_size = 0;
     ctx->reset_interval = 0;
     ctx->reset_blkcount = 0;
-    ctx->lzx_last_block = 0;
+    /* lzx_last_block stays -1 (set above): lzx_state is kept for the next
+       chm_open, but it holds the closed archive's data, not block 0 of the
+       next one. */
     ctx->dir_page_count = 0;
     ctx->dir_pages_seen = 0;
     memset(ctx->dir_seen_bitmap, 0, sizeof(ctx->dir_seen_bitmap));

@@ -64,6 +64,7 @@ CLI:
 ```
 chm_test [-list] file.chm   # open (and with -list, list entries)
 chm_test -lzx-wrap          # LZX wrap-around self-test
+chm_test -reuse a.chm b.chm # reopening on the same ctx reads the same bytes as a fresh ctx
 ```
 
 ## How it was made

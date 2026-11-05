@@ -38,6 +38,31 @@ async function main() {
   }
   console.log(`${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
+
+  // Reusing a ctx: open a, read, close, open b on the same ctx; b's entries
+  // must read the same as on a fresh ctx. Each file is paired with the next
+  // one; exit code 2 means the pair can't exercise the case (different LZX
+  // window or no entry in blocks 1..reset-1).
+  let reuseOk = 0, reuseFail = 0;
+  for (let i = 0; i < files.length; i++) {
+    const a = join(corpusDir, files[i]!);
+    const b = join(corpusDir, files[(i + 1) % files.length]!);
+    if (a === b) continue;
+    const out = await $`${exe} -reuse ${a} ${b}`.quiet().cwd(ROOT).nothrow();
+    if (out.exitCode === 1) {
+      console.error(out.stderr.toString().trim());
+      console.error("FAIL reuse", files[i], "->", files[(i + 1) % files.length]);
+      reuseFail++;
+    } else if (out.exitCode === 0) {
+      reuseOk++;
+    }
+  }
+  console.log(`reuse ctx: ${reuseOk} pairs passed, ${reuseFail} failed`);
+  if (reuseFail > 0) process.exit(1);
+  if (reuseOk === 0) {
+    console.error("FAIL reuse: no file pair in the corpus exercises it");
+    process.exit(1);
+  }
   console.log("all tests passed");
 }
 
