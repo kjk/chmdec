@@ -1,3 +1,16 @@
+/* chmdec -- plain-C CHM reader. https://github.com/kjk/chmdec
+ *
+ * Derived from CHMLib by Jed Wing <jedwin@ugcs.caltech.edu>. The LZX
+ * decompressor derives from cabextract by Stuart Caie, who granted permission
+ * to re-license it under the LGPL for CHMLib.
+ * Changes Copyright (c) 2026 Krzysztof Kowalczyk.
+ *
+ * This library is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or (at
+ * your option) any later version. See LICENSE.md.
+ */
+
 #ifndef CHM_H
 #define CHM_H
 
