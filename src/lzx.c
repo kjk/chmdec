@@ -440,10 +440,15 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
                         table[(next_symbol << 1) + 1] = 0;
                         table[leaf] = LZX_HUFF_NODE | next_symbol++;
                     }
+                    /* a shorter code already ends here: the lengths are invalid, and
+                       following its entry as a node would index past the table */
+                    if (!(table[leaf] & LZX_HUFF_NODE)) return 1;
                     /* follow the path and select either left or right for next bit */
                     leaf = (table[leaf] & LZX_HUFF_NODE_MASK) << 1;
                     if ((pos >> (15 - fill)) & 1) leaf++;
+                    if (leaf >= table_elems) return 1;
                 }
+                if (leaf >= table_elems) return 1;
                 table[leaf] = LZX_HUFF_ENTRY(sym, length[sym]);
 
                 if ((pos += bit_mask) > table_mask) return 1; /* table overflow */

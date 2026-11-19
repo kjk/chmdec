@@ -18,15 +18,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     /* drive common surface */
     struct chm_entry **entries = NULL;
     int n = chm_get_entries(ctx, &entries);
+    /* read every entry, as an app showing the archive does: that is what runs
+       the LZX decoder over the compressed content */
     for (int i = 0; i < n; i++) {
-        if (strcmp(entries[i]->path, "/") == 0 ||
-            strcmp(entries[i]->path, "/#SYSTEM") == 0) {
-            if (entries[i]->length > 0 && entries[i]->length <= (1 << 20)) {
-                uint8_t *tmp = malloc(entries[i]->length);
-                if (tmp) {
-                    chm_read_entry(ctx, entries[i], tmp);
-                    free(tmp);
-                }
+        if (entries[i]->length > 0 && entries[i]->length <= (1 << 20)) {
+            uint8_t *tmp = malloc(entries[i]->length);
+            if (tmp) {
+                chm_read_entry(ctx, entries[i], tmp);
+                free(tmp);
             }
         }
     }

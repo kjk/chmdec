@@ -607,9 +607,13 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
                         table[leaf] = LZX_HUFF_NODE | next_symbol++;
                     }
 
+                    if (!(table[leaf] & LZX_HUFF_NODE)) return 1;
+
                     leaf = (table[leaf] & LZX_HUFF_NODE_MASK) << 1;
                     if ((pos >> (15 - fill)) & 1) leaf++;
+                    if (leaf >= table_elems) return 1;
                 }
+                if (leaf >= table_elems) return 1;
                 table[leaf] = LZX_HUFF_ENTRY(sym, length[sym]);
 
                 if ((pos += bit_mask) > table_mask) return 1;
