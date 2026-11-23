@@ -111,6 +111,8 @@ enough hits. Marks are no-ops when not running under `winperf record`.
 - use chm_alloc / chm_free (never raw malloc in lib code except test)
 - keep LZX logic faithful (only style/minor cleanup)
 - no new features without tests
+- all helper scripts, saved (cmd/) and temporary (scratch/one-off), are written
+  in bun TypeScript (run with `bun file.ts`); no Python, shell, or PowerShell scripts
 
 ## Amalgamation rules
 - dist/ is generated. Do not edit dist/ directly.
