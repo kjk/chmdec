@@ -9,3 +9,5 @@ testfiles/
 fuzz/corpus/
 fuzz/corpus.min/
 fuzz/*.log
+# macOS Finder metadata
+.DS_Store
