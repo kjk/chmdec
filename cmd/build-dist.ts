@@ -126,11 +126,11 @@ export async function buildDist() {
   writeFileSync(DIST_H, LICENSE_HEADER + "\n" + pub);
   writeFileSync(DIST_C, LICENSE_HEADER + "\n" + amalgam);
 
-  // verify compiles
+  // verify it compiles warning-free, as the src/ build does
   const tmp = join(DIST, "chk.c");
   writeFileSync(tmp, `#include "chm.c"\n`);
   try {
-    await $`clang -fsyntax-only -I ${DIST} ${tmp}`.quiet();
+    await $`clang -fsyntax-only -Wall -Werror -D_CRT_SECURE_NO_WARNINGS -I ${DIST} ${tmp}`.quiet();
   } finally {
     rmSync(tmp, { force: true });
   }

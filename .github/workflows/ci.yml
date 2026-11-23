@@ -92,6 +92,9 @@ jobs:
       - name: Amalgamation
         # dist only; the wasm job builds and verifies dist/wasm
         run: bun cmd/build-dist.ts -no-wasm
+      - name: Committed dist/ matches src/
+        # regenerate with `bun cmd/build-dist.ts` and commit dist/ after src/ changes
+        run: git diff --exit-code -- dist/chm.c dist/chm.h
       - name: Fuzz crashes (ASan + UBSan)
         env:
           CHM_FUZZ_UBSAN: "1"

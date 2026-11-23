@@ -1,4 +1,4 @@
-// build-lib.ts -- helpers to build the plain library and fuzz target.
+// build-fuzz.ts -- build the libFuzzer + ASan fuzz target (used by cmd/fuzz.ts).
 import { $ } from "bun";
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "fs";
 import { join, resolve } from "path";
@@ -17,11 +17,9 @@ export const FUZZ_EXE = join(
 // (`brew install llvm`); Windows keeps the VS-bundled clang. Override with
 // CHMDEC_FUZZ_CLANG=/path/to/clang if needed.
 function resolveFuzzClang(): string {
-  const override =
-    process.env.CHMDEC_FUZZ_CLANG ||
-    process.env.CLANG ||
-    process.env.CC ||
-    process.env.FUZZ_CC;
+  // Only a fuzz-specific override: a generic CC (often gcc) can't build
+  // libFuzzer targets.
+  const override = process.env.CHMDEC_FUZZ_CLANG;
   if (override) {
     if (!existsSync(override)) {
       throw new Error(`fuzz clang not found: ${override}`);

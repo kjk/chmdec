@@ -64,7 +64,7 @@ CHMLib oracle tests + amalgamation, fuzz crash regression, WASM open/list.
 CLI:
 ```
 chm_test [-list] file.chm   # open (and with -list, list entries)
-chm_test -lzx-wrap          # LZX self-tests (window wrap-around, input bounds)
+chm_test -self-test         # self-tests (LZX window wrap, LZX input bounds, error callback)
 chm_test -reuse a.chm b.chm # reopening on the same ctx reads the same bytes as a fresh ctx
 ```
 

@@ -19,7 +19,7 @@ import {
   rmSync,
 } from "node:fs";
 import { resolve, join } from "node:path";
-import { buildFuzz, FUZZ_EXE } from "./build-lib";
+import { buildFuzz, FUZZ_EXE } from "./build-fuzz";
 
 const ROOT = resolve(import.meta.dir, "..");
 const FUZZ = join(ROOT, "fuzz");

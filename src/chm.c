@@ -1126,9 +1126,13 @@ static int64_t read_entry_range(chm_ctx *ctx, struct chm_entry* entry, uint8_t* 
        reported as uncompressed but still retrieved via the compressed path,
        matching CHMLib. */
     if (entry->space == CHM_UNCOMPRESSED) {
+        int64_t got = 0;
         /* read data */
-        if (!get_entry_offset(ctx, entry, addr, len, &offset)) return (int64_t)0;
-        return fetch_bytes(ctx, buf, offset, len);
+        if (get_entry_offset(ctx, entry, addr, len, &offset))
+            got = fetch_bytes(ctx, buf, offset, len);
+        if (got == 0)
+            chm_errorf(ctx, CHM_SEV_ERROR, "%s: data lies outside the file", entry->path ? entry->path : "?");
+        return got;
     }
 
     /* else if the file is compressed, it's a little trickier */
@@ -1137,7 +1141,11 @@ static int64_t read_entry_range(chm_ctx *ctx, struct chm_entry* entry, uint8_t* 
         int64_t swath = 0, total = 0;
 
         /* if compression is not enabled for this file... */
-        if (!ctx->compression_enabled) return total;
+        if (!ctx->compression_enabled) {
+            chm_errorf(ctx, CHM_SEV_ERROR, "%s: compressed, but the archive has no usable LZX section",
+                       entry->path ? entry->path : "?");
+            return total;
+        }
 
         do {
             if (!add_u64(entry->start, addr, &offset)) return total;
@@ -1146,7 +1154,12 @@ static int64_t read_entry_range(chm_ctx *ctx, struct chm_entry* entry, uint8_t* 
             swath = decompress_region(ctx, buf, offset, len);
 
             /* if we didn't get any... */
-            if (swath == 0) return total;
+            if (swath == 0) {
+                chm_errorf(ctx, CHM_SEV_ERROR, "%s: decompression failed after %lld of %llu bytes",
+                           entry->path ? entry->path : "?", (long long)(addr),
+                           (unsigned long long)entry->length);
+                return total;
+            }
 
             /* update stats */
             total += swath;
@@ -1158,6 +1171,14 @@ static int64_t read_entry_range(chm_ctx *ctx, struct chm_entry* entry, uint8_t* 
 
         return total;
     }
+}
+
+/* report why chm_open failed and reset the ctx; returns false */
+static bool open_failed(chm_ctx *ctx, const char *why)
+{
+    chm_errorf(ctx, CHM_SEV_ERROR, "chm_open: %s", why);
+    chm_close(ctx);
+    return false;
 }
 
 bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
@@ -1186,10 +1207,7 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
     if (ok) {
         ok = read_itsf_header(&sbufpos, &sremain, &itsfHeader);
     }
-    if (!ok) {
-        chm_close(ctx);
-        return false;
-    }
+    if (!ok) return open_failed(ctx, "not a CHM (missing or invalid ITSF header)");
 
     /* stash important values from header */
     ctx->dir_offset = itsfHeader.dir_offset;
@@ -1203,14 +1221,9 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
     if (ok) {
         ok = read_itsp_header(&sbufpos, &sremain, &itspHeader);
     }
-    if (!ok) {
-        chm_close(ctx);
-        return false;
-    }
-    if (itsfHeader.dir_len < (uint64_t)itspHeader.header_len) {
-        chm_close(ctx);
-        return false;
-    }
+    if (!ok) return open_failed(ctx, "missing or invalid ITSP directory header");
+    if (itsfHeader.dir_len < (uint64_t)itspHeader.header_len)
+        return open_failed(ctx, "directory shorter than its ITSP header");
 
     /* grab essential information from ITSP header */
     ctx->dir_offset += itspHeader.header_len;
@@ -1218,10 +1231,8 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
     ctx->index_root = itspHeader.index_root;
     ctx->index_head = itspHeader.index_head;
     ctx->block_len = itspHeader.block_len;
-    if (dir_page_count(ctx) > CHM_MAX_DIR_PAGES) {
-        chm_close(ctx);
-        return false;
-    }
+    if (dir_page_count(ctx) > CHM_MAX_DIR_PAGES)
+        return open_failed(ctx, "too many directory pages");
     ctx->dir_page_count = dir_page_count(ctx);
 
     /* if the index root is -1, this means we don't have any PMGI blocks.
@@ -1230,7 +1241,8 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
     if (ctx->index_root <= -1) ctx->index_root = ctx->index_head;
 
     /* collect all entries (always everything, no filtering) */
-    collect_entries(ctx);
+    if (collect_entries(ctx) == 0)
+        chm_errorf(ctx, CHM_SEV_WARNING, "chm_open: no entries found (corrupt directory or out of memory)");
 
     /* By default, compression is enabled. */
     ctx->compression_enabled = 1;
@@ -1254,6 +1266,7 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
             ok = read_lzxc_reset_table(&sbufpos, &sremain, &ctx->reset_table);
         }
         if (!ok) {
+            chm_errorf(ctx, CHM_SEV_WARNING, "chm_open: invalid LZX reset table; compressed entries can't be read");
             ctx->compression_enabled = 0;
         } else {
             /* Full retain when the compressed section is modest: extract-all in
@@ -1275,14 +1288,15 @@ bool chm_open(chm_ctx *ctx, const uint8_t *data, size_t len)
     if (ctx->compression_enabled) {
         sremain = (unsigned int)uiLzxc.length;
         if (uiLzxc.length > sizeof(sbuffer)) {
+            /* fails the open (rather than disabling compression) as in CHMLib */
             chm_free(ctx, uiLzxc.path);
-            chm_close(ctx);
-            return false;
+            return open_failed(ctx, "LZX control data too large");
         }
 
         sbufpos = sbuffer;
         if (read_entry_range(ctx, &uiLzxc, sbuffer, 0, sremain) != sremain ||
             !read_lzxc_control_data(&sbufpos, &sremain, &ctlData)) {
+            chm_errorf(ctx, CHM_SEV_WARNING, "chm_open: invalid LZX control data; compressed entries can't be read");
             ctx->compression_enabled = 0;
         } else {
             ctx->window_size = ctlData.windowSize;

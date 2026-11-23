@@ -1,4 +1,4 @@
-// verify-wasm.ts — smoke-test dist/wasm/chm.js by opening a CHM through the
+// verify-wasm.ts — smoke-test dist/wasm/chm.js by opening, listing and reading a CHM through the
 // same exports the web demo uses.
 //
 //   bun cmd/verify-wasm.ts <file.chm>
@@ -64,6 +64,23 @@ for (let i = 0; i < sample; i++) {
   );
 }
 
+// Read every non-empty file entry. The sample may be truncated (some reads
+// fail), but at least one read must succeed and none may over-report.
+let readOk = 0, readFail = 0;
+for (let i = 0; i < n; i++) {
+  const len = M._chm_wasm_entry_length(ctx, i);
+  if (M._chm_wasm_entry_is_dir(ctx, i) || len === 0) continue;
+  const out = M._malloc(len);
+  if (!out) throw new Error("malloc failed");
+  const got = M._chm_wasm_entry_read(ctx, i, out);
+  M._free(out);
+  if (got > len || got < 0) throw new Error(`entry ${i}: read returned ${got} for length ${len}`);
+  if (got === len) readOk++;
+  else readFail++;
+}
+console.log(`  read ${readOk} entries fully, ${readFail} short (corrupt data)`);
+if (readOk === 0) throw new Error("no entry could be read");
+
 M._chm_wasm_close(ctx);
 M._free(buf);
-console.log("✓ wasm open/list OK");
+console.log("✓ wasm open/list/read OK");

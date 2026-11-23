@@ -1,17 +1,11 @@
-# build outputs (harness objects + exes)
+# build outputs (harness, dumpers, fuzz target; exes + PDBs)
 out/
-*.lib
-*.exp
 *.pdb
-*.ilk
 # emsdk and other tools fetched by cmd/build-wasm.ts
 deps/
 # local test corpus (filled by cmd/get-deps.ts)
 testfiles/
-# fuzzing
+# fuzzing (cmd/fuzz.ts runs libFuzzer in fuzz/; -jobs writes fuzz-N.log there)
 fuzz/corpus/
 fuzz/corpus.min/
 fuzz/*.log
-/fuzz/minimized
-/fuzz-0.log
-/terminals

@@ -22,6 +22,7 @@ No writers. No FS I/O.
 - src/lzx.c            — LZX decompressor
 - cmd/*.ts             — bun build/dist/fuzz/tests/...
 - cmd/our-dump.c       — chmdec dumper used by cmd/test.ts, cmd/chm-info.ts, cmd/bench.ts
+- cmd/chmlib-dump.c    — same dump format via the vendored CHMLib (oracle side of cmd/test.ts)
 - cmd/chm-info.ts      — list a CHM's entries via chmdec or CHMLib (`-chmlib`)
 - dist/                — amalgamation (chm.h/c) + optional dist/wasm/
 - cmd/wasm-demo.html   — browser demo source (copied to dist/wasm/demo.html)
@@ -58,9 +59,9 @@ in sync with `..\winperf\client\winperf_control.h`.
 - `bun cmd/bench.ts <file.chm … | -rand N | -all>` — open/extract-all/close vs CHMLib
   (compact `chmlib chmdec diff %diff file` lines; best-of-3 each side)
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies with
-  `clang -fsyntax-only`, then always rebuilds dist/wasm (bootstraps emsdk if
+  `clang -fsyntax-only -Wall -Werror`, then always rebuilds dist/wasm (bootstraps emsdk if
   needed). For dist only: `bun cmd/build-dist.ts -no-wasm`
-- `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint.
+- `bun cmd/fuzz.ts` — libFuzzer+ASan (target built by cmd/build-fuzz.ts); seeds from testfiles/chm ; corpus/ is checkpoint.
   Flags: `-jobs N`, `-repro FILE`, `-check-crashes` (CI: replay all
   `fuzz/crashes/*`, expect exit 0), `-minimize`, `-max-len N`. Linux/macOS CI may
   set `CHM_FUZZ_UBSAN=1` for ASan+UBSan+fuzzer. macOS needs Homebrew LLVM
@@ -119,7 +120,9 @@ enough hits. Marks are no-ops when not running under `winperf record`.
   stripped, and at most one blank line in a row.
 - dist/chm.h and dist/chm.c start with the LGPL license header (`LICENSE_HEADER`
   in cmd/build-dist.ts), since comment stripping drops the src/ license banners.
-- **Agents do not commit dist/** unless the user asks.
+- CI (Linux job) fails when dist/chm.h or dist/chm.c is out of date with src/:
+  regenerate and commit dist/ together with the src/ change. dist/wasm is not
+  checked (emcc output varies by version).
 
 ## Fuzzing
 Crashes go to `fuzz/crashes/` (commit them as seeds). Use `-repro FILE` to

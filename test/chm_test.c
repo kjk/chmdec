@@ -236,6 +236,79 @@ static uint8_t *load_file(const char *path, size_t *len)
     return d;
 }
 
+struct err_log {
+    int count;
+    int last_sev;
+    char last[256];
+};
+
+static void err_cb(void *user, int severity, const char *msg)
+{
+    struct err_log *log = (struct err_log *)user;
+    log->count++;
+    log->last_sev = severity;
+    snprintf(log->last, sizeof(log->last), "%s", msg);
+}
+
+/* expect exactly one new message of severity sev containing want */
+static int expect_err(struct err_log *log, int before, int sev, const char *want, const char *what)
+{
+    if (log->count == before + 1 && log->last_sev == sev && strstr(log->last, want))
+        return 0;
+    fprintf(stderr, "error cb (%s): %d new message(s), last sev=%d \"%s\", want sev=%d \"%s\"\n",
+            what, log->count - before, log->last_sev, log->last, sev, want);
+    return 1;
+}
+
+/* Failures are reported through the error callback. */
+static int error_cb_test(void)
+{
+    struct err_log log;
+    chm_ctx *ctx;
+    uint8_t junk[128];
+    uint8_t itsf[0x60];
+    uint8_t buf[16];
+    struct chm_entry e;
+    int failed = 0, before;
+
+    memset(&log, 0, sizeof(log));
+    ctx = chm_ctx_new(NULL, NULL, err_cb, &log);
+    if (!ctx) return 1;
+
+    memset(junk, 0x41, sizeof(junk));
+    before = log.count;
+    if (chm_open(ctx, junk, sizeof(junk))) failed = 1;
+    failed |= expect_err(&log, before, CHM_SEV_ERROR, "ITSF", "not a chm");
+
+    /* valid ITSF v3 header whose directory lies past the end of the data */
+    memset(itsf, 0, sizeof(itsf));
+    memcpy(itsf, "ITSF", 4);
+    itsf[4] = 3;          /* version */
+    itsf[8] = 0x60;       /* header_len */
+    itsf[0x49] = 0x10;    /* dir_offset = 0x1000 */
+    itsf[0x50] = 0x54;    /* dir_len */
+    before = log.count;
+    if (chm_open(ctx, itsf, sizeof(itsf))) failed = 1;
+    failed |= expect_err(&log, before, CHM_SEV_ERROR, "ITSP", "missing directory");
+
+    /* reads that can't be satisfied (nothing is open on ctx) */
+    memset(&e, 0, sizeof(e));
+    e.path = (char *)"/x.htm";
+    e.length = sizeof(buf);
+    e.space = CHM_UNCOMPRESSED;
+    before = log.count;
+    if (chm_read_entry(ctx, &e, buf) != 0) failed = 1;
+    failed |= expect_err(&log, before, CHM_SEV_ERROR, "/x.htm", "uncompressed read");
+    e.space = CHM_COMPRESSED;
+    e.is_compressed = true;
+    before = log.count;
+    if (chm_read_entry(ctx, &e, buf) != 0) failed = 1;
+    failed |= expect_err(&log, before, CHM_SEV_ERROR, "LZX", "compressed read");
+
+    chm_ctx_free(ctx);
+    return failed;
+}
+
 /* Read entry `path` of the archive open on ctx into a malloc'd buffer.
    Returns the number of bytes read (-1 if the entry is missing). */
 static int64_t read_by_path(chm_ctx *ctx, const char *path, uint8_t **out)
@@ -370,7 +443,7 @@ static void print_entry(struct chm_entry *entry)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: chm_test [-list] file.chm\n       chm_test -lzx-wrap\n"
+        fprintf(stderr, "usage: chm_test [-list] file.chm\n       chm_test -self-test\n"
                         "       chm_test -reuse a.chm b.chm\n");
         return 1;
     }
@@ -382,17 +455,17 @@ int main(int argc, char **argv)
         return reuse_test(argv[2], argv[3]);
     }
     int do_list = 0;
-    int only_wrap = 0;
+    int only_self = 0;
     const char *path = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-list") == 0) do_list = 1;
-        else if (strcmp(argv[i], "-lzx-wrap") == 0) only_wrap = 1;
+        else if (strcmp(argv[i], "-self-test") == 0) only_self = 1;
         else if (!path) path = argv[i];
     }
-    if (lzx_window_wrap() != 0 || lzx_input_end() != 0)
+    if (lzx_window_wrap() != 0 || lzx_input_end() != 0 || error_cb_test() != 0)
         return 1;
-    if (only_wrap) {
-        printf("lzx self-tests OK\n");
+    if (only_self) {
+        printf("self-tests OK\n");
         return 0;
     }
     if (!path) {

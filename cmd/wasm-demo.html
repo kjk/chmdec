@@ -150,6 +150,8 @@
     td.size { white-space: nowrap; color: var(--muted); width: 7rem; }
     td.kind { width: 4.5rem; color: var(--muted); }
     tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+    tr.readable { cursor: pointer; }
+    tr.readable td.path { color: var(--accent); }
     footer {
       margin-top: 2rem;
       color: var(--muted);
@@ -161,7 +163,7 @@
 <body>
   <main>
     <h1>chmdec demo</h1>
-    <p class="sub">Open or drop a <code>.chm</code> file to list every entry path and size (in-browser wasm).</p>
+    <p class="sub">Open or drop a <code>.chm</code> file to list every entry path and size (in-browser wasm). Click a file to download it.</p>
 
     <div id="drop" tabindex="0" role="button" aria-label="Open or drop a CHM file">
       <p><strong>Drop a .chm file here</strong></p>
@@ -207,6 +209,44 @@
     const fileInput = $("file");
 
     let Module = null;
+    // the open archive: its bytes must stay in the wasm heap while ctx is open
+    let current = null; // { ctx, heap }
+
+    function closeCurrent() {
+      if (!current) return;
+      Module._chm_wasm_close(current.ctx);
+      Module._free(current.heap);
+      current = null;
+    }
+
+    // Read entry i of the open archive into a fresh Uint8Array.
+    function readEntry(i, length) {
+      const buf = Module._malloc(Math.max(length, 1));
+      if (!buf) throw new Error("malloc failed");
+      try {
+        const got = Module._chm_wasm_entry_read(current.ctx, i, buf);
+        if (got !== length) throw new Error(`read ${got} of ${length} bytes (corrupt data?)`);
+        return Module.HEAPU8.slice(buf, buf + length);
+      } finally {
+        Module._free(buf);
+      }
+    }
+
+    function downloadEntry(r) {
+      try {
+        const data = readEntry(r.index, r.length);
+        const url = URL.createObjectURL(new Blob([data]));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = r.path.split("/").filter(Boolean).pop() || "entry";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setStatus(`Extracted ${r.path} (${formatSize(r.length)})`, "ok");
+      } catch (e) {
+        console.error(e);
+        setStatus(`${r.path}: ${e && e.message ? e.message : String(e)}`, "error");
+      }
+    }
 
     function setStatus(msg, kind) {
       statusEl.textContent = msg;
@@ -225,57 +265,60 @@
 
     function listChm(bytes, fileName) {
       if (!Module) throw new Error("wasm not ready");
+      closeCurrent();
       const heap = Module._malloc(bytes.byteLength);
       if (!heap) throw new Error("malloc failed");
-      try {
-        Module.HEAPU8.set(bytes, heap);
-        const ctx = Module._chm_wasm_open(heap, bytes.byteLength);
-        if (!ctx) throw new Error("failed to open CHM (invalid or unsupported file)");
-        try {
-          const n = Module._chm_wasm_entry_count(ctx);
-          const rows = [];
-          let files = 0, dirs = 0, totalBytes = 0;
-          for (let i = 0; i < n; i++) {
-            const pathPtr = Module._chm_wasm_entry_path(ctx, i);
-            const path = pathPtr ? Module.UTF8ToString(pathPtr) : "(null)";
-            const length = Module._chm_wasm_entry_length(ctx, i);
-            const isDir = Module._chm_wasm_entry_is_dir(ctx, i) !== 0;
-            const isFile = Module._chm_wasm_entry_is_file(ctx, i) !== 0;
-            if (isDir) dirs++;
-            if (isFile) files++;
-            totalBytes += length;
-            rows.push({ path, length, isDir, isFile });
-          }
-          rows.sort((a, b) => a.path.localeCompare(b.path));
-          tbody.replaceChildren();
-          const frag = document.createDocumentFragment();
-          for (const r of rows) {
-            const tr = document.createElement("tr");
-            const kind = r.isDir ? "dir" : r.isFile ? "file" : "—";
-            tr.innerHTML =
-              `<td class="path"></td>` +
-              `<td class="kind"></td>` +
-              `<td class="size"></td>`;
-            tr.children[0].textContent = r.path;
-            tr.children[1].textContent = kind;
-            tr.children[2].textContent = r.isDir ? "—" : formatSize(r.length) + " (" + r.length + ")";
-            frag.appendChild(tr);
-          }
-          tbody.appendChild(frag);
-          meta.innerHTML =
-            `<span><strong>${escapeHtml(fileName)}</strong></span>` +
-            `<span>${n} entries</span>` +
-            `<span>${files} files · ${dirs} dirs</span>` +
-            `<span>payload sum ${formatSize(totalBytes)}</span>` +
-            `<span>archive ${formatSize(bytes.byteLength)}</span>`;
-          panel.classList.add("show");
-          setStatus(`Listed ${n} entries from ${fileName}`, "ok");
-        } finally {
-          Module._chm_wasm_close(ctx);
-        }
-      } finally {
+      Module.HEAPU8.set(bytes, heap);
+      const ctx = Module._chm_wasm_open(heap, bytes.byteLength);
+      if (!ctx) {
         Module._free(heap);
+        throw new Error("failed to open CHM (invalid or unsupported file)");
       }
+      current = { ctx, heap };
+
+      const n = Module._chm_wasm_entry_count(ctx);
+      const rows = [];
+      let files = 0, dirs = 0, totalBytes = 0;
+      for (let i = 0; i < n; i++) {
+        const pathPtr = Module._chm_wasm_entry_path(ctx, i);
+        const path = pathPtr ? Module.UTF8ToString(pathPtr) : "(null)";
+        const length = Module._chm_wasm_entry_length(ctx, i);
+        const isDir = Module._chm_wasm_entry_is_dir(ctx, i) !== 0;
+        const isFile = Module._chm_wasm_entry_is_file(ctx, i) !== 0;
+        if (isDir) dirs++;
+        if (isFile) files++;
+        totalBytes += length;
+        rows.push({ index: i, path, length, isDir, isFile });
+      }
+      rows.sort((a, b) => a.path.localeCompare(b.path));
+      tbody.replaceChildren();
+      const frag = document.createDocumentFragment();
+      for (const r of rows) {
+        const tr = document.createElement("tr");
+        const kind = r.isDir ? "dir" : r.isFile ? "file" : "—";
+        tr.innerHTML =
+          `<td class="path"></td>` +
+          `<td class="kind"></td>` +
+          `<td class="size"></td>`;
+        tr.children[0].textContent = r.path;
+        tr.children[1].textContent = kind;
+        tr.children[2].textContent = r.isDir ? "—" : formatSize(r.length) + " (" + r.length + ")";
+        if (!r.isDir && r.length > 0) {
+          tr.className = "readable";
+          tr.title = "Click to download";
+          tr.addEventListener("click", () => downloadEntry(r));
+        }
+        frag.appendChild(tr);
+      }
+      tbody.appendChild(frag);
+      meta.innerHTML =
+        `<span><strong>${escapeHtml(fileName)}</strong></span>` +
+        `<span>${n} entries</span>` +
+        `<span>${files} files · ${dirs} dirs</span>` +
+        `<span>payload sum ${formatSize(totalBytes)}</span>` +
+        `<span>archive ${formatSize(bytes.byteLength)}</span>`;
+      panel.classList.add("show");
+      setStatus(`Listed ${n} entries from ${fileName}`, "ok");
     }
 
     function escapeHtml(s) {

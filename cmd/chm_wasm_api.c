@@ -64,3 +64,14 @@ int chm_wasm_entry_is_file(chm_ctx *ctx, int i)
     struct chm_entry *e = entry_at(ctx, i);
     return e && e->is_file ? 1 : 0;
 }
+
+/* Read entry i into buf (the caller allocates at least entry_length bytes
+   with _malloc). Returns the number of bytes read; the read succeeded only if
+   that equals entry_length. Returns -1 for a bad index. */
+double chm_wasm_entry_read(chm_ctx *ctx, int i, uint8_t *buf)
+{
+    struct chm_entry *e = entry_at(ctx, i);
+    if (!e || !buf)
+        return -1.0;
+    return (double)chm_read_entry(ctx, e, buf);
+}

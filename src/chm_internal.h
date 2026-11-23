@@ -226,6 +226,10 @@ struct chmLzxcControlData {
 /* allocator wrappers (ctx may be null -> defaults) */
 void *chm_alloc(chm_ctx *ctx, size_t size);
 void  chm_free(chm_ctx *ctx, void *ptr);
+/* format and pass a message to ctx's error callback, if any (sev: CHM_SEV_*) */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 3, 4)))
+#endif
 void  chm_errorf(chm_ctx *ctx, int sev, const char *fmt, ...);
 
 /* concrete ctx definition (after all structs it references); the archive

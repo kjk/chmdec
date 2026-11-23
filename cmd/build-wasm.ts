@@ -155,6 +155,7 @@ const EXPORTS = [
   "_chm_wasm_entry_length",
   "_chm_wasm_entry_is_dir",
   "_chm_wasm_entry_is_file",
+  "_chm_wasm_entry_read",
   "_malloc",
   "_free",
 ];
