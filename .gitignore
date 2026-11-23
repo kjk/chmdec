@@ -8,6 +8,7 @@ testfiles/
 # fuzzing (cmd/fuzz.ts runs libFuzzer in fuzz/; -jobs writes fuzz-N.log there)
 fuzz/corpus/
 fuzz/corpus.min/
+/fuzz/minimized/
 fuzz/*.log
 # macOS Finder metadata
 .DS_Store
