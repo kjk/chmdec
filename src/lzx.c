@@ -30,6 +30,10 @@
 
 #include "chm_internal.h"
 
+#if defined(__aarch64__) && defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 /* LZX decruncher */
 
 /* Microsoft's LZX document and their implementation of the
@@ -181,8 +185,9 @@ int LZXreset(struct LZXstate* pState) {
  * REMOVE_BITS(n)    removes N bits from the bit buffer
  *
  * Bits are packed toward the MSB; LZX supplies the stream as 16-bit LE words.
- * A 64-bit bitbuf holds ~4 halfwords so huffman symbols rarely refill (the
- * 32-bit bitbuf refilled almost every symbol and dominated profiles).
+ * The bit count is nonnegative between reads. Huffman codes are at most
+ * 16 bits wide. Only a verbatim offset can request 17 bits, which requires
+ * a second word when the buffer starts empty.
  */
 
 #define BITBUF_WIDTH 64
@@ -195,13 +200,23 @@ int LZXreset(struct LZXstate* pState) {
 
 /* Unchecked 16-bit refill. Callers must leave LZX_INPUT_PAD zero bytes past
  * the real compressed input (decompress_block pads the cbuffer). */
-#define ENSURE_BITS(n)                                                                   \
-    while (bitsleft < (n)) {                                                             \
-        bitbuf |= (uint64_t)((uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8))              \
-                  << (BITBUF_WIDTH - 16 - bitsleft);                                      \
-        bitsleft += 16;                                                                  \
-        inpos += 2;                                                                      \
-    }
+#define LZX_REFILL_WORD()                                                     \
+    do {                                                                     \
+        bitbuf |= (uint64_t)((uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8))   \
+                  << (BITBUF_WIDTH - 16 - bitsleft);                         \
+        bitsleft += 16;                                                      \
+        inpos += 2;                                                          \
+    } while (0)
+
+#define ENSURE_BITS(n)                       \
+    do {                                     \
+        if (bitsleft < (n)) {                 \
+            LZX_REFILL_WORD();                \
+            if ((n) > 16 && bitsleft < (n)) { \
+                LZX_REFILL_WORD();           \
+            }                                \
+        }                                    \
+    } while (0)
 
 #define PEEK_BITS(n) (bitbuf >> (BITBUF_WIDTH - (n)))
 #define REMOVE_BITS(n) ((bitbuf <<= (n)), (bitsleft -= (n)))
@@ -289,11 +304,13 @@ static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM
        previous window lap, which later matches may still reference. */
     uint32_t n = (uint32_t)match_length;
     if (n < 4) {
-        /* n is 1..3 (1 only when a match wrapped around the window end) */
-        uint8_t a = src[0], b = src[n >> 1], c = src[n - 1];
-        dest[0] = a;
-        dest[n >> 1] = b;
-        dest[n - 1] = c;
+        /* Only a match split at the window boundary can leave one byte. */
+        if (n > 1) {
+            uint16_t a;
+            memcpy(&a, src, 2);
+            memcpy(dest, &a, 2);
+        }
+        dest[n - 1] = src[n - 1];
     } else if (n <= 8) {
         uint32_t a, b;
         memcpy(&a, src, 4);
@@ -307,6 +324,23 @@ static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM
         memcpy(dest, &a, 8);
         memcpy(dest + n - 8, &b, 8);
     } else {
+#if defined(__aarch64__) && defined(__ARM_NEON)
+        /* The last vector covers the remainder without extending the copy. */
+        const uint8_t* tail = src + n - 16;
+        uint8_t* dtail = dest + n - 16;
+        while (n > 32) {
+            uint8x16_t a = vld1q_u8(src);
+            uint8x16_t b = vld1q_u8(src + 16);
+            vst1q_u8(dest, a);
+            vst1q_u8(dest + 16, b);
+            src += 32;
+            dest += 32;
+            n -= 32;
+        }
+        if (n > 16)
+            vst1q_u8(dest, vld1q_u8(src));
+        vst1q_u8(dtail, vld1q_u8(tail));
+#else
         uint64_t t;
         const uint8_t* tail = src + n - 8;
         uint8_t* dtail = dest + n - 8;
@@ -327,6 +361,7 @@ static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM
             memcpy(dest, &a, 8);
         }
         memcpy(dtail, &t, 8);
+#endif
     }
 }
 

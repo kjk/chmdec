@@ -310,6 +310,10 @@ struct chm_ctx {
 
 #endif
 
+#if defined(__aarch64__) && defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 static const uint8_t extra_bits[51] = {0,  0,  0,  0,  1,  1,  2,  2,  3,  3,  4,  4,  5,  5,  6,  6,  7,
                                      7,  8,  8,  9,  9,  10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15,
                                      16, 16, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17};
@@ -396,13 +400,23 @@ int LZXreset(struct LZXstate* pState) {
         bitbuf = 0;    \
     } while (0)
 
-#define ENSURE_BITS(n)                                                                   \
-    while (bitsleft < (n)) {                                                             \
-        bitbuf |= (uint64_t)((uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8))              \
-                  << (BITBUF_WIDTH - 16 - bitsleft);                                      \
-        bitsleft += 16;                                                                  \
-        inpos += 2;                                                                      \
-    }
+#define LZX_REFILL_WORD()                                                     \
+    do {                                                                     \
+        bitbuf |= (uint64_t)((uint32_t)inpos[0] | ((uint32_t)inpos[1] << 8))   \
+                  << (BITBUF_WIDTH - 16 - bitsleft);                         \
+        bitsleft += 16;                                                      \
+        inpos += 2;                                                          \
+    } while (0)
+
+#define ENSURE_BITS(n)                       \
+    do {                                     \
+        if (bitsleft < (n)) {                 \
+            LZX_REFILL_WORD();                \
+            if ((n) > 16 && bitsleft < (n)) { \
+                LZX_REFILL_WORD();           \
+            }                                \
+        }                                    \
+    } while (0)
 
 #define PEEK_BITS(n) (bitbuf >> (BITBUF_WIDTH - (n)))
 #define REMOVE_BITS(n) ((bitbuf <<= (n)), (bitsleft -= (n)))
@@ -468,10 +482,12 @@ static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM
     uint32_t n = (uint32_t)match_length;
     if (n < 4) {
 
-        uint8_t a = src[0], b = src[n >> 1], c = src[n - 1];
-        dest[0] = a;
-        dest[n >> 1] = b;
-        dest[n - 1] = c;
+        if (n > 1) {
+            uint16_t a;
+            memcpy(&a, src, 2);
+            memcpy(dest, &a, 2);
+        }
+        dest[n - 1] = src[n - 1];
     } else if (n <= 8) {
         uint32_t a, b;
         memcpy(&a, src, 4);
@@ -485,6 +501,23 @@ static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM
         memcpy(dest, &a, 8);
         memcpy(dest + n - 8, &b, 8);
     } else {
+#if defined(__aarch64__) && defined(__ARM_NEON)
+
+        const uint8_t* tail = src + n - 16;
+        uint8_t* dtail = dest + n - 16;
+        while (n > 32) {
+            uint8x16_t a = vld1q_u8(src);
+            uint8x16_t b = vld1q_u8(src + 16);
+            vst1q_u8(dest, a);
+            vst1q_u8(dest + 16, b);
+            src += 32;
+            dest += 32;
+            n -= 32;
+        }
+        if (n > 16)
+            vst1q_u8(dest, vld1q_u8(src));
+        vst1q_u8(dtail, vld1q_u8(tail));
+#else
         uint64_t t;
         const uint8_t* tail = src + n - 8;
         uint8_t* dtail = dest + n - 8;
@@ -505,6 +538,7 @@ static inline void lzx_copy_match(uint8_t* CHM_RESTRICT dest, const uint8_t* CHM
             memcpy(dest, &a, 8);
         }
         memcpy(dtail, &t, 8);
+#endif
     }
 }
 
