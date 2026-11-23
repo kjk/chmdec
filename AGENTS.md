@@ -59,7 +59,7 @@ in sync with `..\winperf\client\winperf_control.h`.
   (compact `chmlib chmdec diff %diff file` lines; best-of-3 each side)
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies with
   `clang -fsyntax-only`, then always rebuilds dist/wasm (bootstraps emsdk if
-  needed). For dist only: `bun -e 'await (await import("./cmd/build-dist.ts")).buildDist()'`
+  needed). For dist only: `bun cmd/build-dist.ts -no-wasm`
 - `bun cmd/fuzz.ts` — libFuzzer+ASan; seeds from testfiles/chm ; corpus/ is checkpoint.
   Flags: `-jobs N`, `-repro FILE`, `-check-crashes` (CI: replay all
   `fuzz/crashes/*`, expect exit 0), `-minimize`, `-max-len N`. Linux/macOS CI may

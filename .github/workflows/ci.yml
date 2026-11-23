@@ -44,7 +44,8 @@ jobs:
           bun cmd/tests.ts
           bun cmd/test.ts testfiles/chm
       - name: Amalgamation
-        run: bun cmd/build-dist.ts
+        # dist only; the wasm job builds and verifies dist/wasm
+        run: bun cmd/build-dist.ts -no-wasm
 
   windows-clang-fuzz:
     name: Windows clang ASan crash regression
@@ -89,7 +90,8 @@ jobs:
           bun cmd/tests.ts
           bun cmd/test.ts testfiles/chm
       - name: Amalgamation
-        run: bun cmd/build-dist.ts
+        # dist only; the wasm job builds and verifies dist/wasm
+        run: bun cmd/build-dist.ts -no-wasm
       - name: Fuzz crashes (ASan + UBSan)
         env:
           CHM_FUZZ_UBSAN: "1"
@@ -117,7 +119,8 @@ jobs:
           bun cmd/tests.ts
           bun cmd/test.ts testfiles/chm
       - name: Amalgamation
-        run: bun cmd/build-dist.ts
+        # dist only; the wasm job builds and verifies dist/wasm
+        run: bun cmd/build-dist.ts -no-wasm
 
   wasm:
     name: WASM open/list smoke

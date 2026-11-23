@@ -8,7 +8,7 @@ import {
   writeFileSync,
   readFileSync,
 } from "fs";
-import { basename, isAbsolute, join, relative, resolve } from "path";
+import { basename, join, resolve } from "path";
 import { CHMLIB_DIR, getDeps } from "./get-deps";
 
 export const ROOT = resolve(import.meta.dir, "..");
@@ -574,15 +574,6 @@ export function fmtBytesHuman(n: number): string {
   if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${n} B`;
-}
-
-/** "path/to/file.chm (1.2 MB, 1,234,567 bytes)" relative to repo root when possible. */
-export function fileLabel(f: string, root: string = ROOT): string {
-  let rel = relative(root, f);
-  if (rel.startsWith("..") || isAbsolute(rel)) rel = f;
-  rel = rel.replaceAll("\\", "/");
-  const size = statSync(f).size;
-  return `${rel} (${fmtBytesHuman(size)}, ${fmtBytesExact(size)} bytes)`;
 }
 
 export function corpusSummary(): string {

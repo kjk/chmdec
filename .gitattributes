@@ -1,2 +1,8 @@
 # Force LF for all text files (cross-platform checkouts).
 * text=auto eol=lf
+# Never let text=auto guess on binaries: a sample or fuzz artifact without an
+# early NUL byte would otherwise get its line endings rewritten.
+*.chm binary
+*.lit binary
+*.wasm binary
+fuzz/crashes/** binary

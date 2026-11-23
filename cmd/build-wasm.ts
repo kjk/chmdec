@@ -42,19 +42,14 @@ const q = (s: string) => {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 };
 
-// Run a shell command. On Windows uses cmd.exe + emsdk_env.bat; elsewhere bash.
-// Use bash -c (not -lc): a login shell rewrites PATH on macOS (system paths
-// before Homebrew), so Homebrew emcc finds Xcode python3 3.9 and dies —
-// emscripten requires Python >= 3.10 (prefer EMSDK_PYTHON / Homebrew python3).
-function sh(cmd: string, opts: { cwd?: string; allowFail?: boolean; quiet?: boolean } = {}) {
-  const cwd = opts.cwd ?? ROOT;
-  const stdio = opts.quiet ? ("pipe" as const) : ("inherit" as const);
-  // A git-bash parent leaks MSYSTEM into the env, which makes emsdk scripts
-  // think they run in an MSYS shell and print `export` lines instead of
-  // setting cmd.exe's PATH — emcc then never lands on PATH.
+// A git-bash parent leaks MSYSTEM into the env, which makes emsdk scripts
+// think they run in an MSYS shell and print `export` lines instead of
+// setting cmd.exe's PATH — emcc then never lands on PATH.
+// Elsewhere prefer a modern python3 (Homebrew/emsdk): emscripten requires
+// Python >= 3.10.
+function pythonEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env.MSYSTEM;
-  // Prefer a modern python3 when emcc is on PATH (Homebrew/emsdk).
   if (!isWin && !env.EMSDK_PYTHON) {
     for (const py of [
       "/opt/homebrew/bin/python3",
@@ -67,6 +62,17 @@ function sh(cmd: string, opts: { cwd?: string; allowFail?: boolean; quiet?: bool
       }
     }
   }
+  return env;
+}
+
+// Run a shell command. On Windows uses cmd.exe + emsdk_env.bat; elsewhere bash.
+// Use bash -c (not -lc): a login shell rewrites PATH on macOS (system paths
+// before Homebrew), so Homebrew emcc finds Xcode python3 3.9 and dies —
+// emscripten requires Python >= 3.10 (prefer EMSDK_PYTHON / Homebrew python3).
+function sh(cmd: string, opts: { cwd?: string; allowFail?: boolean; quiet?: boolean } = {}) {
+  const cwd = opts.cwd ?? ROOT;
+  const stdio = opts.quiet ? ("pipe" as const) : ("inherit" as const);
+  const env = pythonEnv();
   const r = isWin
     ? spawnSync("cmd.exe", ["/d", "/s", "/c", cmd], { cwd, stdio, encoding: "utf8", env })
     : spawnSync("bash", ["-c", cmd], { cwd, stdio, encoding: "utf8", env });
@@ -75,23 +81,6 @@ function sh(cmd: string, opts: { cwd?: string; allowFail?: boolean; quiet?: bool
     throw new Error(`command failed (${r.status}): ${cmd}`);
   }
   return r;
-}
-
-function pythonEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  delete env.MSYSTEM;
-  if (!isWin && !env.EMSDK_PYTHON) {
-    for (const py of [
-      "/opt/homebrew/bin/python3",
-      "/usr/local/bin/python3",
-    ]) {
-      if (existsSync(py)) {
-        env.EMSDK_PYTHON = py;
-        break;
-      }
-    }
-  }
-  return env;
 }
 
 // True only if emcc is present *and* can print its version (a PATH hit that
@@ -112,8 +101,7 @@ function findEmcc(): string | null {
   if (emccOnPath()) return "";
   if (!existsSync(EMSDK_ENV)) return null;
   if (isWin) {
-    const env = { ...process.env };
-    delete env.MSYSTEM; // see sh()
+    const env = pythonEnv(); // drops MSYSTEM
     const r = spawnSync(
       "cmd.exe",
       ["/d", "/s", "/c", `call ${q(EMSDK_ENV)} >nul 2>&1 && where emcc`],

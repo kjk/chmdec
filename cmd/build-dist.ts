@@ -1,6 +1,7 @@
 // build-dist.ts -- produce amalgamated dist/chm.h + dist/chm.c (sqlite style).
 //
-//   bun cmd/build-dist.ts
+//   bun cmd/build-dist.ts            # dist/chm.{h,c}, then dist/wasm
+//   bun cmd/build-dist.ts -no-wasm   # dist/chm.{h,c} only (no emsdk needed)
 //
 // dist/chm.h : license header + copy of src/chm.h
 // dist/chm.c : license header + src/chm.h + src/chm_internal.h + src/lzx.c + src/chm.c (with local includes stripped)
@@ -137,8 +138,12 @@ export async function buildDist() {
 }
 
 if (import.meta.main) {
-  // buildWasm() calls ensureDist() -> buildDist() first, so don't build dist
-  // twice; this regenerates dist/ (always clean) and then the wasm drop-in.
-  const { buildWasm } = await import("./build-wasm");
-  await buildWasm();
+  if (process.argv.includes("-no-wasm")) {
+    await buildDist();
+  } else {
+    // buildWasm() calls ensureDist() -> buildDist() first, so don't build dist
+    // twice; this regenerates dist/ (always clean) and then the wasm drop-in.
+    const { buildWasm } = await import("./build-wasm");
+    await buildWasm();
+  }
 }

@@ -12,8 +12,7 @@ const ROOT = `${import.meta.dir}/..`.replaceAll("\\", "/");
 const OUT_ROOT = `${ROOT}/out`;
 const OUT = `${OUT_ROOT}/clang`;
 
-export const isWindows = process.platform === "win32";
-export const isMac = process.platform === "darwin";
+const isWindows = process.platform === "win32";
 
 function binName(base: string): string {
   return isWindows ? `${base}.exe` : base;
@@ -28,7 +27,9 @@ function objFor(src: string): string {
   return `${OUT}/${base}.o`;
 }
 
-/** -O3 for decode speed; CodeView on Windows so winperf can symbolicate. */
+/** -O3 for decode speed; CodeView on Windows so winperf can symbolicate.
+ *  _CRT_SECURE_NO_WARNINGS: the test harness uses fopen/strcpy, which the
+ *  MSVC UCRT deprecates (an error under -Werror). */
 function cFlags(): string {
   const pdb = isWindows ? " -g -gcodeview" : " -g";
   return `-O3 -Wall -Werror -D_CRT_SECURE_NO_WARNINGS${pdb} -I${ROOT}/src -I${ROOT}/test`;
@@ -37,10 +38,7 @@ function cFlags(): string {
 // Always compile from scratch. mtime-based incremental builds silently served
 // stale binaries when a header/source change wasn't detected, so C code here is
 // always rebuilt clean rather than cached.
-export async function build(useClang = true): Promise<string> {
-  if (!useClang && isWindows) {
-    // On windows one could use cl, but for this port we use clang everywhere.
-  }
+export async function build(): Promise<string> {
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
 
@@ -56,8 +54,6 @@ export async function build(useClang = true): Promise<string> {
   const testExe = `${OUT}/${binName("chm_test")}`;
   const testSrc = `${ROOT}/${TEST}`;
   console.log("link chm_test");
-  // chm_test.c uses fopen; silence the MSVC/UCRT deprecation so -Werror
-  // doesn't fail the Windows build (the library sources use no unsafe CRT).
   await $`clang ${{ raw: flags }} ${objs} ${testSrc} -o ${testExe}`.cwd(ROOT);
 
   const benchExe = `${OUT}/${binName("chm_bench")}`;
@@ -76,7 +72,7 @@ export async function main() {
     rmSync(OUT_ROOT, { recursive: true, force: true });
     console.log("cleaned out/");
   }
-  const exe = await build(true);
+  const exe = await build();
   console.log(`built ${exe}`);
 }
 

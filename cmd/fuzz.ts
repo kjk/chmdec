@@ -87,8 +87,7 @@ async function run(argv: string[]): Promise<number> {
   return await proc.exited;
 }
 
-const exe = await buildFuzz(true); // always clean-build
-void exe;
+await buildFuzz(true); // always clean-build
 
 mkdirSync(CORPUS, { recursive: true });
 mkdirSync(CRASHES, { recursive: true });

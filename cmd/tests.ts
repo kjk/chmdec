@@ -9,7 +9,7 @@ const ROOT = `${import.meta.dir}/..`;
 
 async function main() {
   const corpusDir = await getDeps();
-  const exe = await build(true);
+  const exe = await build();
   const files = readdirSync(corpusDir).filter(f => f.toLowerCase().endsWith(".chm"));
   if (files.length === 0) {
     console.error("no .chm files under testfiles/chm (run: bun cmd/get-deps.ts)");

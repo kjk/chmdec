@@ -1,5 +1,5 @@
 // test.ts -- compare chmdec extraction against upstream CHMLib.
-import { buildDumpers, findChmFiles, readDump, type ChmDump, type ChmDumpEntry } from "./chm-common";
+import { buildDumpers, findChmFiles, pickRandom, readDump, type ChmDump, type ChmDumpEntry } from "./chm-common";
 
 type DumpResult = { ok: true; dump: ChmDump } | { ok: false; error: string };
 
@@ -14,17 +14,6 @@ async function tryDump(exe: string, file: string): Promise<DumpResult> {
 function usage(): never {
   console.error("usage: bun cmd/test.ts [-rand N] <file.chm|directory>");
   process.exit(2);
-}
-
-// Randomly pick n files from the list (Fisher-Yates partial shuffle).
-function pickRandom<T>(items: T[], n: number): T[] {
-  const arr = items.slice();
-  const count = Math.min(n, arr.length);
-  for (let i = 0; i < count; i++) {
-    const j = i + Math.floor(Math.random() * (arr.length - i));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr.slice(0, count);
 }
 
 function entryMap(entries: ChmDumpEntry[], label: string): Map<string, ChmDumpEntry> {
