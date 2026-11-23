@@ -63,7 +63,7 @@ static int lzx_window_wrap(void)
     const int wnd = 15;
     const int size = 1 << wnd;
     const int tailN = 4;
-    struct LZXstate *st = LZXinit(wnd);
+    struct LZXstate *st = LZXinit(NULL, wnd);
     int n1, nIn1, rc, nA, nB;
     uint8_t *pay1 = NULL, *in1 = NULL, *out1 = NULL;
     uint8_t blockTail[4] = {1, 2, 3, 4};
@@ -108,10 +108,112 @@ static int lzx_window_wrap(void)
     }
 
 done:
-    LZXteardown(st);
+    LZXteardown(NULL, st);
     free(pay1);
     free(in1);
     free(out1);
+    return failed;
+}
+
+/* Pretree used by lzx_input_end: delta codes z = 0..14 get 4-bit codes
+ * (z), z = 15/16 get 5-bit codes 30/31; symbols 17..19 are unused. */
+static void lzx_pretree(struct lzx_bits *w)
+{
+    for (int i = 0; i < 20; i++)
+        lzx_bits(w, i < 15 ? 4 : (i < 17 ? 5 : 0), 4);
+}
+
+static void lzx_pretree_sym(struct lzx_bits *w, int z)
+{
+    if (z < 15)
+        lzx_bits(w, (uint32_t)z, 4);
+    else
+        lzx_bits(w, (uint32_t)(30 + z - 15), 5);
+}
+
+/* A verbatim block whose literals all use a 16-bit code needs 2 input bytes
+ * per output byte. Decoded from a buffer that holds only part of that input
+ * (as decompress_block's cbuffer would), LZXdecompress must fail instead of
+ * reading past the end of the buffer (heap over-read under ASan before the
+ * per-symbol end checks). */
+static int lzx_input_end(void)
+{
+    const int outN = 32768;
+    const int cap = 70000;
+    uint8_t *s = (uint8_t *)calloc((size_t)cap, 1);
+    uint8_t *in = NULL, *out = (uint8_t *)malloc((size_t)outN);
+    struct LZXstate *st = LZXinit(NULL, 15);
+    struct lzx_bits w;
+    int n, inShort, rc, x, failed = 0;
+
+    if (!s || !out || !st) {
+        fprintf(stderr, "lzx_input_end: oom\n");
+        failed = 1;
+        goto done;
+    }
+    w.d = s;
+    w.cap = cap;
+    w.nbits = 0;
+    lzx_bits(&w, 0, 1);                       /* no intel E8 header */
+    lzx_bits(&w, 1, 3);                       /* verbatim block */
+    lzx_bits(&w, (uint32_t)outN >> 8, 16);
+    lzx_bits(&w, (uint32_t)outN & 0xff, 8);
+    /* main tree: literal k has length k+1 for k < 16, literal 16 has length
+       16 (a complete code); delta from 0 is z = (17 - len) % 17 */
+    lzx_pretree(&w);
+    for (x = 0; x < 256; x++) {
+        int len = x <= 15 ? x + 1 : (x == 16 ? 16 : 0);
+        lzx_pretree_sym(&w, (17 - len) % 17);
+    }
+    lzx_pretree(&w);
+    for (x = 256; x < 256 + 30 * 8; x++) /* main_elements for a 2^15 window */
+        lzx_pretree_sym(&w, 0);
+    lzx_pretree(&w);                          /* empty length tree */
+    for (x = 0; x < LZX_NUM_SECONDARY_LENGTHS; x++)
+        lzx_pretree_sym(&w, 0);
+    for (x = 0; x < outN; x++)
+        lzx_bits(&w, 0xFFFE, 16);             /* literal 15: 15 ones, then 0 */
+    n = lzx_align16(&w);
+
+    /* whole stream: decodes to outN bytes of 0x0F */
+    in = (uint8_t *)calloc((size_t)n + LZX_INPUT_PAD, 1);
+    if (!in) {
+        failed = 1;
+        goto done;
+    }
+    memcpy(in, s, (size_t)n);
+    rc = LZXdecompress(st, in, out, n, outN);
+    for (x = 0; x < outN && rc == DECR_OK; x++) {
+        if (out[x] != 0x0F) rc = -1;
+    }
+    if (rc != DECR_OK) {
+        fprintf(stderr, "lzx_input_end: full stream failed rc=%d\n", rc);
+        failed = 1;
+        goto done;
+    }
+    free(in);
+
+    /* truncated to the largest frame decompress_block accepts for a 32 KB
+       block, in a buffer sized like its cbuffer */
+    inShort = outN + 6144;
+    in = (uint8_t *)calloc((size_t)inShort + LZX_INPUT_PAD, 1);
+    if (!in) {
+        failed = 1;
+        goto done;
+    }
+    memcpy(in, s, (size_t)inShort);
+    LZXreset(st);
+    rc = LZXdecompress(st, in, out, inShort, outN);
+    if (rc == DECR_OK) {
+        fprintf(stderr, "lzx_input_end: truncated stream decoded (rc=%d)\n", rc);
+        failed = 1;
+    }
+
+done:
+    LZXteardown(NULL, st);
+    free(s);
+    free(in);
+    free(out);
     return failed;
 }
 
@@ -287,10 +389,10 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "-lzx-wrap") == 0) only_wrap = 1;
         else if (!path) path = argv[i];
     }
-    if (lzx_window_wrap() != 0)
+    if (lzx_window_wrap() != 0 || lzx_input_end() != 0)
         return 1;
     if (only_wrap) {
-        printf("lzx-wrap OK\n");
+        printf("lzx self-tests OK\n");
         return 0;
     }
     if (!path) {

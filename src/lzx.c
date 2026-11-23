@@ -94,26 +94,25 @@ static const uint32_t position_base[51] = {
     8192,   12288,  16384,  24576,   32768,   49152,   65536,   98304,   131072,  196608,  262144,  393216, 524288,
     655360, 786432, 917504, 1048576, 1179648, 1310720, 1441792, 1572864, 1703936, 1835008, 1966080, 2097152};
 
-struct LZXstate* LZXinit(int window) {
+struct LZXstate* LZXinit(chm_ctx* ctx, int window) {
     struct LZXstate* pState = NULL;
-    uint32_t wndsize = 1 << window;
+    uint32_t wndsize;
     int i, posn_slots;
 
     /* LZX supports window sizes of 2^15 (32Kb) through 2^21 (2Mb) */
-    /* if a previously allocated window is big enough, keep it     */
     if (window < 15 || window > 21) return NULL;
+    wndsize = 1u << window;
 
     /* allocate state and associated window */
-    pState = (struct LZXstate*)malloc(sizeof(struct LZXstate));
+    pState = (struct LZXstate*)chm_alloc(ctx, sizeof(struct LZXstate));
     if (pState) {
-        pState->window = (uint8_t*)malloc(wndsize);
+        pState->window = (uint8_t*)chm_alloc(ctx, wndsize);
     }
     if (!pState || !pState->window) {
-        free(pState);
+        chm_free(ctx, pState);
         return NULL;
     }
     memset(pState->window, 0, wndsize);
-    pState->actual_size = wndsize;
     pState->window_size = wndsize;
 
     /* calculate required position slots */
@@ -146,10 +145,10 @@ struct LZXstate* LZXinit(int window) {
     return pState;
 }
 
-void LZXteardown(struct LZXstate* pState) {
+void LZXteardown(chm_ctx* ctx, struct LZXstate* pState) {
     if (pState) {
-        if (pState->window) free(pState->window);
-        free(pState);
+        chm_free(ctx, pState->window);
+        chm_free(ctx, pState);
     }
 }
 
@@ -221,49 +220,21 @@ int LZXreset(struct LZXstate* pState) {
 #define SYMTABLE(tbl) (pState->tbl##_table)
 #define LENTABLE(tbl) (pState->tbl##_len)
 
-/* BUILD_TABLE(tablename) builds a huffman lookup table from code lengths. */
-#define BUILD_TABLE(tbl)                                                                    \
-    if (make_decode_table(MAXSYMBOLS(tbl), TABLEBITS(tbl), LENTABLE(tbl), SYMTABLE(tbl))) { \
-        return DECR_ILLEGALDATA;                                                            \
-    }
-
-/* Like BUILD_TABLE but with an explicit symbol count (MAINTREE only uses
- * main_elements, not the full MAXSYMBOLS slot — saves make_decode_table scans). */
-#define BUILD_TABLE_NSYMS(tbl, nsyms)                                              \
+/* BUILD_TABLE_NSYMS(tablename, nsyms) builds a huffman lookup table from the
+ * code lengths of the first nsyms symbols (MAINTREE only uses main_elements,
+ * not the full MAXSYMBOLS slot — saves make_decode_table scans). */
+#define BUILD_TABLE_NSYMS(tbl, nsyms)                                               \
     if (make_decode_table((nsyms), TABLEBITS(tbl), LENTABLE(tbl), SYMTABLE(tbl))) { \
         return DECR_ILLEGALDATA;                                                   \
     }
 
+/* BUILD_TABLE(tablename) builds a huffman lookup table from code lengths. */
+#define BUILD_TABLE(tbl) BUILD_TABLE_NSYMS(tbl, MAXSYMBOLS(tbl))
+
 /* Decode one huffman symbol. Table entries pack (len<<16)|sym (terminal) or
  * LZX_HUFF_NODE|node_id (internal). Long-code walk: each NODE value is a node
- * id; the next table index is (node_id<<1)|bit — same as classic LZX. */
-#define READ_HUFFSYM(tbl, var)                                                      \
-    do {                                                                            \
-        uint32_t _e;                                                                \
-        ENSURE_BITS(16);                                                            \
-        hufftbl = SYMTABLE(tbl);                                                    \
-        _e = hufftbl[PEEK_BITS(TABLEBITS(tbl))];                                    \
-        if (CHM_UNLIKELY(_e & LZX_HUFF_NODE)) {                                     \
-            uint64_t jb = 1ull << (BITBUF_WIDTH - TABLEBITS(tbl));                   \
-            do {                                                                    \
-                uint32_t node = _e & LZX_HUFF_NODE_MASK;                             \
-                jb >>= 1;                                                           \
-                node = (node << 1) | ((bitbuf & jb) ? 1u : 0u);                     \
-                if (!jb) {                                                          \
-                    return DECR_ILLEGALDATA;                                        \
-                }                                                                   \
-                _e = hufftbl[node];                                                 \
-            } while (_e & LZX_HUFF_NODE);                                           \
-        }                                                                           \
-        (var) = (int)LZX_HUFF_SYM(_e);                                              \
-        j = LZX_HUFF_LEN(_e);                                                       \
-        if (CHM_UNLIKELY(j == 0)) {                                                 \
-            return DECR_ILLEGALDATA;                                                \
-        }                                                                           \
-        REMOVE_BITS(j);                                                             \
-    } while (0)
-
-/* Hot path: table pointer already in a local (length is packed into entries). */
+ * id; the next table index is (node_id<<1)|bit — same as classic LZX.
+ * The hot loops pass a table pointer cached in a local. */
 #define READ_HUFFSYM_LOCAL(table, tablebits, var)                                   \
     do {                                                                            \
         uint32_t _e;                                                                \
@@ -287,6 +258,21 @@ int LZXreset(struct LZXstate* pState) {
             return DECR_ILLEGALDATA;                                                \
         }                                                                           \
         REMOVE_BITS(j);                                                             \
+    } while (0)
+
+#define READ_HUFFSYM(tbl, var) READ_HUFFSYM_LOCAL(SYMTABLE(tbl), TABLEBITS(tbl), var)
+
+/* Input bounds. ENSURE_BITS refills without checking for the end of input, so
+ * the decode loops check once per symbol that inpos is at most LZX_INPUT_SLACK
+ * bytes past the end of the frame. Valid data never gets there: the bit buffer
+ * holds at most 4 bytes more than were consumed. Without the check, corrupt data
+ * that keeps decoding past the end of its frame reads past the input buffer.
+ * Between two checks the decoder reads at most ~40 bytes, which stays inside
+ * the LZX_INPUT_PAD bytes of zero padding the caller provides. */
+#define LZX_INPUT_SLACK 8
+#define CHECK_INPUT_END(endp, fail)                                   \
+    do {                                                              \
+        if (CHM_UNLIKELY(inpos > (endp) + LZX_INPUT_SLACK)) fail;     \
     } while (0)
 
 /* Non-overlapping match copy: word-sized stores beat byte loops and avoid
@@ -467,30 +453,6 @@ static int make_decode_table(uint32_t nsyms, uint32_t nbits, uint8_t* length, ui
     return 0;
 }
 
-int LZX_test_pretree_make_decode_table(void) {
-    uint32_t nsyms = LZX_PRETREE_MAXSYMBOLS;
-    uint32_t nbits = LZX_PRETREE_TABLEBITS;
-    uint32_t table_elems = (1 << nbits) + (nsyms << 1);
-    uint32_t* table = (uint32_t*)calloc(table_elems, sizeof(uint32_t));
-    uint8_t* length = (uint8_t*)malloc(nsyms);
-    uint32_t i;
-
-    if (!table || !length) {
-        free(table);
-        free(length);
-        return -1;
-    }
-
-    for (i = 0; i < nsyms; i++) {
-        length[i] = 15;
-    }
-
-    i = (uint32_t)make_decode_table(nsyms, nbits, length, table);
-    free(table);
-    free(length);
-    return (int)i;
-}
-
 struct lzx_bits {
     uint64_t bb;
     int bl;
@@ -505,8 +467,6 @@ static int lzx_read_lens(struct LZXstate* pState, uint8_t* lens, uint32_t first,
     uint64_t bitbuf = lb->bb;
     int bitsleft = lb->bl;
     uint8_t* inpos = lb->ip;
-    uint32_t* hufftbl;
-    (void)lb->end; /* padding handles over-read; end kept for API symmetry */
 
     for (x = 0; x < 20; x++) {
         READ_BITS(y, 4);
@@ -515,6 +475,7 @@ static int lzx_read_lens(struct LZXstate* pState, uint8_t* lens, uint32_t first,
     BUILD_TABLE(PRETREE);
 
     for (x = first; x < last;) {
+        CHECK_INPUT_END(lb->end, return 1);
         READ_HUFFSYM(PRETREE, z);
         if (z == 17) {
             READ_BITS(y, 4);
@@ -664,6 +625,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     uint32_t* main_table = SYMTABLE(MAINTREE);
                     uint32_t* length_table = SYMTABLE(LENGTH);
                     while (this_run > 0) {
+                        CHECK_INPUT_END(endinp, return DECR_ILLEGALDATA);
                         READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, main_element);
 
                         if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
@@ -734,6 +696,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     uint32_t* length_table = SYMTABLE(LENGTH);
                     uint32_t* aligned_table = SYMTABLE(ALIGNED);
                     while (this_run > 0) {
+                        CHECK_INPUT_END(endinp, return DECR_ILLEGALDATA);
                         READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, main_element);
 
                         if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
@@ -885,47 +848,3 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
     }
     return DECR_OK;
 }
-
-#ifdef LZX_CHM_TESTDRIVER
-int main(int c, char** v) {
-    FILE *fin, *fout;
-    struct LZXstate state;
-    uint8_t ibuf[16384];
-    uint8_t obuf[32768];
-    int ilen, olen;
-    int status;
-    int i;
-    int count = 0;
-    int w = atoi(v[1]);
-    LZXinit(&state, w);
-    fout = fopen(v[2], "wb");
-    for (i = 3; i < c; i++) {
-        fin = fopen(v[i], "rb");
-        ilen = fread(ibuf, 1, 16384, fin);
-        status = LZXdecompress(&state, ibuf, obuf, ilen, 32768);
-        switch (status) {
-            case DECR_OK:
-                printf("ok\n");
-                fwrite(obuf, 1, 32768, fout);
-                break;
-            case DECR_DATAFORMAT:
-                printf("bad format\n");
-                break;
-            case DECR_ILLEGALDATA:
-                printf("illegal data\n");
-                break;
-            case DECR_NOMEMORY:
-                printf("no memory\n");
-                break;
-            default:
-                break;
-        }
-        fclose(fin);
-        if (++count == 2) {
-            count = 0;
-            LZXreset(&state);
-        }
-    }
-    fclose(fout);
-}
-#endif

@@ -50,6 +50,7 @@ bun cmd/get-deps.ts       # download public .chm samples → testfiles/chm
 bun cmd/tests.ts          # smoke tests over testfiles/chm (auto get-deps)
 bun cmd/test.ts testfiles/chm  # byte-compare extraction vs vendored CHMLib (-rand N)
 bun cmd/build-dist.ts     # updates dist/chm.{h,c}, then rebuilds dist/wasm (needs emsdk)
+bun cmd/build-dist.ts -no-wasm  # dist/chm.{h,c} only
 bun cmd/build-wasm.ts     # dist/wasm/chm.js + chm.wasm + demo.html (bootstraps emsdk if needed)
 bun cmd/verify-wasm.ts f.chm  # open/list through the wasm glue (CI)
 bun cmd/run-wasm-demo.ts  # serve the browser demo
@@ -63,7 +64,7 @@ CHMLib oracle tests + amalgamation, fuzz crash regression, WASM open/list.
 CLI:
 ```
 chm_test [-list] file.chm   # open (and with -list, list entries)
-chm_test -lzx-wrap          # LZX wrap-around self-test
+chm_test -lzx-wrap          # LZX self-tests (window wrap-around, input bounds)
 chm_test -reuse a.chm b.chm # reopening on the same ctx reads the same bytes as a fresh ctx
 ```
 

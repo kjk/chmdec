@@ -86,7 +86,6 @@
 struct LZXstate {
     uint8_t *window;
     uint32_t window_size;
-    uint32_t actual_size;
     uint32_t window_posn;
     uint32_t R0, R1, R2;
     uint16_t main_elements;
@@ -106,15 +105,16 @@ struct LZXstate {
     LZX_DECLARE_TABLE(ALIGNED);
 };
 
-/* LZX public (internal to us) */
-struct LZXstate *LZXinit(int window);
-void LZXteardown(struct LZXstate *pState);
+/* LZX public (internal to us). ctx is used only for allocation (may be NULL
+   for the default allocator). */
+struct LZXstate *LZXinit(chm_ctx *ctx, int window);
+void LZXteardown(chm_ctx *ctx, struct LZXstate *pState);
 int LZXreset(struct LZXstate *pState);
 int LZXdecompress(struct LZXstate *pState, uint8_t *inpos, uint8_t *outpos, int inlen, int outlen);
-int LZX_test_pretree_make_decode_table(void); /* test helper */
 
-/* Zero bytes after each compressed frame so LZX ENSURE_BITS can 16/32-bit
- * refill past the real end without reading uninitialized heap. */
+/* LZXdecompress reads past inpos + inlen (ENSURE_BITS refills without bounds
+ * checks, bounded by per-symbol end checks), so the caller must provide
+ * LZX_INPUT_PAD zero bytes after each compressed frame. */
 #define LZX_INPUT_PAD 64
 
 /* ===================================================================== */
@@ -124,12 +124,14 @@ int LZX_test_pretree_make_decode_table(void); /* test helper */
 /* tuning */
 /* Decompressed LZX blocks kept in memory. CHMLib used 5; that thrashes when
    directory order jumps around. We retain every block when block_count fits
-   under CHM_FULL_CACHE_MAX_BLOCKS (~50 MB at 32 KB/block); larger archives
-   use a small ring so sequential extracts do not first-touch hundreds of MB.
-   Slots are allocated lazily. */
-#define CHM_MAX_BLOCKS_CACHED 2048
+   under CHM_FULL_CACHE_MAX_BLOCKS and the blocks fit in
+   CHM_FULL_CACHE_MAX_BYTES (48 MB = 1536 blocks of the usual 32 KB); larger
+   archives use a small ring so sequential extracts do not first-touch
+   hundreds of MB. Slots are allocated lazily. */
 #define CHM_FULL_CACHE_MAX_BLOCKS 1536
+#define CHM_FULL_CACHE_MAX_BYTES ((uint64_t)CHM_FULL_CACHE_MAX_BLOCKS * 32768)
 #define CHM_RING_CACHE_BLOCKS 64
+#define CHM_MAX_BLOCKS_CACHED CHM_FULL_CACHE_MAX_BLOCKS /* cache array size */
 #define CHM_MAX_DIR_PAGES 65536
 #define CHM_DIR_SEEN_BITMAP_BITS CHM_MAX_DIR_PAGES
 #define CHM_DIR_SEEN_BITMAP_WORDS (CHM_DIR_SEEN_BITMAP_BITS / 32)
@@ -179,7 +181,6 @@ struct chmItspHeader {
     uint8_t unknown_0044[16];
 };
 
-static const char *_chm_pmgl_marker = "PMGL";
 #define _CHM_PMGL_LEN (0x14)
 
 struct chmPmglHeader {
@@ -190,7 +191,6 @@ struct chmPmglHeader {
     int32_t block_next;
 };
 
-static const char *_chm_pmgi_marker = "PMGI";
 #define _CHM_PMGI_LEN (0x08)
 
 struct chmPmgiHeader {
@@ -223,23 +223,13 @@ struct chmLzxcControlData {
     uint32_t unknown_18;
 };
 
-/* archive state lives directly in chm_ctx (no separate chmFile) */
-
 /* allocator wrappers (ctx may be null -> defaults) */
 void *chm_alloc(chm_ctx *ctx, size_t size);
 void  chm_free(chm_ctx *ctx, void *ptr);
 void  chm_errorf(chm_ctx *ctx, int sev, const char *fmt, ...);
 
-/* dir session (used within chm.c) */
-struct chmDirSession {
-    chm_ctx *ctx;
-    uint8_t *page_buf;
-    uint8_t *page_buf_end;
-};
-
-/* no more callback enumeration; entries are collected into ctx at open time */
-
-/* concrete ctx definition (after all structs it references) */
+/* concrete ctx definition (after all structs it references); the archive
+   state lives directly in chm_ctx (no separate chmFile) */
 struct chm_ctx {
     chm_alloc_cb alloc;
     chm_free_cb  free;
@@ -257,7 +247,6 @@ struct chm_ctx {
     int32_t index_head;
     uint32_t block_len;
 
-    uint64_t span;
     struct chm_entry rt_entry;
     struct chm_entry cn_entry;
     struct chmLzxcResetTable reset_table;
@@ -279,17 +268,17 @@ struct chm_ctx {
        preserves CHMLib's behavior of exposing a block's (partially) decoded
        buffer even when a later part of that block fails to decode. Each
        cache_blocks[i] holds cache_block_alloc_len bytes (allocated lazily) or
-       is NULL. cache_num_blocks is sized to min(block_count,
-       CHM_MAX_BLOCKS_CACHED) when the reset table is known so a full extract
-       can retain every block. Buffers survive chm_close for reuse; indices
-       are invalidated. Freed in chm_ctx_free. */
+       is NULL. When the reset table is known, cache_num_blocks is block_count
+       if that fits the full-cache limits above (so a full extract retains
+       every block), else CHM_RING_CACHE_BLOCKS. Buffers survive chm_close for
+       reuse; indices are invalidated. Freed in chm_ctx_free. */
     uint8_t *cache_blocks[CHM_MAX_BLOCKS_CACHED];
     int64_t cache_block_indices[CHM_MAX_BLOCKS_CACHED];
     int cache_num_blocks;
     uint32_t cache_block_alloc_len; /* 0 if none allocated; else slot byte size */
 
-    /* scratch for one compressed LZX block (reset_table.block_len + 6144);
-       reused across decompress_block calls and across chm_close. */
+    /* scratch for one compressed LZX block (reset_table.block_len + 6144 +
+       LZX_INPUT_PAD); reused across decompress_block calls and chm_close. */
     uint8_t *lzx_cbuffer;
     uint64_t lzx_cbuffer_len;
 
