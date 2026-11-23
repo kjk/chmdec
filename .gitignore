@@ -12,3 +12,4 @@ fuzz/corpus.min/
 fuzz/*.log
 # macOS Finder metadata
 .DS_Store
+/fuzz-0.log
