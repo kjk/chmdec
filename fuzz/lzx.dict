@@ -1,0 +1,15 @@
+# lzx.dict -- dictionary for the raw LZX target (test/fuzz_lzx.c).
+# The first byte is the window size (15..21). out_len is a little-endian
+# u32 at offset 2; 0x8000 is the block size real CHMs use.
+
+win15="\x0f"
+win16="\x10"
+win17="\x11"
+win18="\x12"
+win19="\x13"
+win20="\x14"
+win21="\x15"
+# reset every frame, out_len = 32768
+frame_32k="\x01\x00\x80\x00\x00"
+# a 2-byte verbatim-ish prefix the bit reader consumes first (LE 16-bit words)
+le_word="\x00\x00"

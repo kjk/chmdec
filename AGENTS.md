@@ -27,7 +27,7 @@ No writers. No FS I/O.
 - dist/                — amalgamation (chm.h/c) + optional dist/wasm/
 - cmd/wasm-demo.html   — browser demo source (copied to dist/wasm/demo.html)
 - cmd/chm_wasm_api.c   — thin JS-friendly wasm exports
-- fuzz/                — crashes/ tracked; corpus/ ignored
+- fuzz/                — crashes/ tracked; corpus/, corpus-lzx/, afl-out/ ignored
 - test/                — chm_test.c , chm_bench.c , fuzz_target.c , winperf_control.h
 - test/CHMLib/         — vendored sumatrapdf ext/CHMLib fork (oracle for cmd/test.ts)
 - testfiles/chm/       — .chm corpus (gitignored; `bun cmd/get-deps.ts` fills from public GitHub samples)
@@ -61,11 +61,24 @@ in sync with `..\winperf\client\winperf_control.h`.
 - `bun cmd/build-dist.ts` — produces dist/chm.h + dist/chm.c ; verifies with
   `clang -fsyntax-only -Wall -Werror`, then always rebuilds dist/wasm (bootstraps emsdk if
   needed). For dist only: `bun cmd/build-dist.ts -no-wasm`
-- `bun cmd/fuzz.ts` — libFuzzer+ASan (target built by cmd/build-fuzz.ts); seeds from testfiles/chm ; corpus/ is checkpoint.
-  Flags: `-jobs N`, `-repro FILE`, `-check-crashes` (CI: replay all
-  `fuzz/crashes/*`, expect exit 0), `-minimize`, `-max-len N`. Linux/macOS CI may
-  set `CHM_FUZZ_UBSAN=1` for ASan+UBSan+fuzzer. macOS needs Homebrew LLVM
-  (`brew install llvm`); override with `CHMDEC_FUZZ_CLANG`.
+- `bun cmd/fuzz.ts` — libFuzzer (targets built by cmd/build-fuzz.ts). Seeds from
+  testfiles/chm. Corpus dirs are the checkpoint.
+  Targets (`-target`): `doc` (default, whole file, ITSF-aware mutator
+  `test/fuzz_mutator.c`, dictionary `fuzz/chm.dict`, corpus `fuzz/corpus`,
+  crashes `fuzz/crashes`) and `lzx` (raw LZX frames cut from real CHMs,
+  `test/fuzz_lzx.c`, `fuzz/lzx.dict`, `fuzz/corpus-lzx`, `fuzz/crashes/lzx`).
+  Flags: `-jobs N`, `-time SEC`, `-runs N`, `-repro FILE`, `-check-crashes`
+  (CI: replay every crash file, expect exit 0; no `-target` checks both),
+  `-minimize`, `-max-len N`, `-coverage` (llvm-cov report of src/ under
+  `out/fuzz/cov/`), `-reseed`, `-no-mutator`. Sanitizers: ASan everywhere;
+  UBSan on by default on Linux/macOS (`-no-ubsan` leaves it out; `CHM_FUZZ_UBSAN`
+  still overrides). `-msan` is a MemorySanitizer build (Linux only).
+  macOS needs Homebrew LLVM (`brew install llvm`); override with `CHMDEC_FUZZ_CLANG`.
+- `bun cmd/fuzz-afl.ts` — AFL++ on Linux/macOS (`brew install afl++` /
+  `apt install afl++`), same harnesses and corpora. CmpLog on the main
+  instance. State in `fuzz/afl-out[-lzx]/` (gitignored); new queue entries and
+  crashes are copied back on exit. `-import` merges without fuzzing.
+  macOS once: `sudo afl-system-config`.
 - `bun cmd/build-wasm.ts` — emscripten build → dist/wasm/chm.js + chm.wasm + demo.html
   (bootstraps `deps/emsdk` if `emcc` is missing; `-clean` wipes/reinstalls emsdk)
 - `bun cmd/verify-wasm.ts <file.chm>` — open/list smoke via the wasm glue (CI)
@@ -127,8 +140,9 @@ enough hits. Marks are no-ops when not running under `winperf record`.
   checked (emcc output varies by version).
 
 ## Fuzzing
-Crashes go to `fuzz/crashes/` (commit them as seeds). Use `-repro FILE` to
-debug; `bun cmd/fuzz.ts -check-crashes` for the CI regression suite.
+Crashes go to `fuzz/crashes/` (doc) or `fuzz/crashes/lzx/` (commit them as
+seeds). Use `-repro FILE` to debug; `bun cmd/fuzz.ts -check-crashes` for the
+CI regression suite.
 
 ## Wasm
 `dist/wasm/` holds the emscripten build (`chm.js` + `chm.wasm`, LF-only JS glue) and `demo.html`.

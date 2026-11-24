@@ -54,8 +54,9 @@ bun cmd/build-dist.ts -no-wasm  # dist/chm.{h,c} only
 bun cmd/build-wasm.ts     # dist/wasm/chm.js + chm.wasm + demo.html (bootstraps emsdk if needed)
 bun cmd/verify-wasm.ts f.chm  # open/list through the wasm glue (CI)
 bun cmd/run-wasm-demo.ts  # serve the browser demo
-bun cmd/fuzz.ts           # libFuzzer (seeded from testfiles/chm)
-bun cmd/fuzz.ts -check-crashes  # replay fuzz/crashes/* under ASan (CI)
+bun cmd/fuzz.ts           # libFuzzer + ASan (+ UBSan on Linux/macOS); -target lzx
+bun cmd/fuzz-afl.ts       # AFL++ on Linux/macOS (same corpus as fuzz.ts)
+bun cmd/fuzz.ts -check-crashes  # replay fuzz/crashes under the sanitizer (CI)
 ```
 
 CI (GitHub Actions): `.github/workflows/ci.yml` — Windows/Linux/macOS smoke +

@@ -5,10 +5,15 @@ out/
 deps/
 # local test corpus (filled by cmd/get-deps.ts)
 testfiles/
-# fuzzing (cmd/fuzz.ts runs libFuzzer in fuzz/; -jobs writes fuzz-N.log there)
+# fuzzing (cmd/fuzz.ts, cmd/fuzz-afl.ts). crashes/ stays tracked.
 fuzz/corpus/
+fuzz/corpus-*/
 fuzz/corpus.min/
+fuzz/corpus.min-*/
 /fuzz/minimized/
+fuzz/afl-out/
+fuzz/afl-out-*/
+fuzz/logs/
 fuzz/*.log
 # macOS Finder metadata
 .DS_Store

@@ -1,0 +1,33 @@
+# chm.dict -- libFuzzer / AFL++ dictionary for whole-file CHM inputs.
+# Signatures, section names and size fields the byte mutators never guess.
+# The ITSF-aware mutator is test/fuzz_mutator.c.
+
+sig_itsf="ITSF"
+sig_itsp="ITSP"
+sig_pmgl="PMGL"
+sig_pmgi="PMGI"
+sig_lzxc="LZXC"
+
+# ITSF / ITSP header lengths, directory block, 32 KB unit
+hdr_v2="\x58\x00\x00\x00"
+hdr_v3="\x60\x00\x00\x00"
+itsp_len="\x54\x00\x00\x00"
+dir_block="\x00\x10\x00\x00"
+unit_32k="\x00\x80\x00\x00"
+ver2="\x02\x00\x00\x00"
+ver3="\x03\x00\x00\x00"
+
+# Section names the open path resolves before it will decompress.
+content="::DataSpace/Storage/MSCompressed/Content"
+control="::DataSpace/Storage/MSCompressed/ControlData"
+reset_guid="{7FC28940-9D31-11D0-9B27-00A0C91E9C7C}"
+reset_tail="InstanceData/ResetTable"
+
+# Names almost every CHM has. Useful once a directory page is being mutated.
+sys="#SYSTEM"
+strings="#STRINGS"
+topics="#TOPICS"
+urlstr="#URLSTR"
+urltbl="#URLTBL"
+windows="#WINDOWS"
+idxhdr="#IDXHDR"

@@ -440,7 +440,9 @@ int LZXreset(struct LZXstate* pState) {
 
 #define BUILD_TABLE(tbl) BUILD_TABLE_NSYMS(tbl, MAXSYMBOLS(tbl))
 
-#define READ_HUFFSYM_LOCAL(table, tablebits, var)                                   \
+#define LZX_TABLE_N(tbl) ((1u << LZX_##tbl##_TABLEBITS) + ((uint32_t)LZX_##tbl##_MAXSYMBOLS << 1))
+
+#define READ_HUFFSYM_LOCAL(table, tablebits, tablesize, var)                        \
     do {                                                                            \
         uint32_t _e;                                                                \
         ENSURE_BITS(16);                                                            \
@@ -449,12 +451,14 @@ int LZXreset(struct LZXstate* pState) {
             uint64_t jb = 1ull << (BITBUF_WIDTH - (tablebits));                      \
             do {                                                                    \
                 uint32_t node = _e & LZX_HUFF_NODE_MASK;                             \
-                jb >>= 1;                                                           \
-                node = (node << 1) | ((bitbuf & jb) ? 1u : 0u);                     \
-                if (!jb) {                                                          \
+                uint32_t child;                                                     \
+                if (node >= ((tablesize) >> 1))                                     \
                     return DECR_ILLEGALDATA;                                        \
-                }                                                                   \
-                _e = (table)[node];                                                 \
+                jb >>= 1;                                                           \
+                child = (node << 1) | ((bitbuf & jb) ? 1u : 0u);                    \
+                if (!jb || child >= (tablesize))                                    \
+                    return DECR_ILLEGALDATA;                                        \
+                _e = (table)[child];                                                \
             } while (_e & LZX_HUFF_NODE);                                           \
         }                                                                           \
         (var) = (int)LZX_HUFF_SYM(_e);                                              \
@@ -465,7 +469,8 @@ int LZXreset(struct LZXstate* pState) {
         REMOVE_BITS(j);                                                             \
     } while (0)
 
-#define READ_HUFFSYM(tbl, var) READ_HUFFSYM_LOCAL(SYMTABLE(tbl), TABLEBITS(tbl), var)
+#define READ_HUFFSYM(tbl, var) \
+    READ_HUFFSYM_LOCAL(SYMTABLE(tbl), TABLEBITS(tbl), LZX_TABLE_N(tbl), var)
 
 #define LZX_INPUT_SLACK 8
 #define CHECK_INPUT_END(endp, fail)                                   \
@@ -850,7 +855,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     uint32_t* length_table = SYMTABLE(LENGTH);
                     while (this_run > 0) {
                         CHECK_INPUT_END(endinp, return DECR_ILLEGALDATA);
-                        READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, main_element);
+                        READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, LZX_TABLE_N(MAINTREE), main_element);
 
                         if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
                             window[window_posn++] = (uint8_t)main_element;
@@ -860,7 +865,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
 
                             match_length = main_element & LZX_NUM_PRIMARY_LENGTHS;
                             if (match_length == LZX_NUM_PRIMARY_LENGTHS) {
-                                READ_HUFFSYM_LOCAL(length_table, LZX_LENGTH_TABLEBITS,
+                                READ_HUFFSYM_LOCAL(length_table, LZX_LENGTH_TABLEBITS, LZX_TABLE_N(LENGTH),
                                                    length_footer);
                                 match_length += length_footer;
                             }
@@ -919,7 +924,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                     uint32_t* aligned_table = SYMTABLE(ALIGNED);
                     while (this_run > 0) {
                         CHECK_INPUT_END(endinp, return DECR_ILLEGALDATA);
-                        READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, main_element);
+                        READ_HUFFSYM_LOCAL(main_table, LZX_MAINTREE_TABLEBITS, LZX_TABLE_N(MAINTREE), main_element);
 
                         if (CHM_LIKELY(main_element < LZX_NUM_CHARS)) {
                             window[window_posn++] = (uint8_t)main_element;
@@ -929,7 +934,7 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
 
                             match_length = main_element & LZX_NUM_PRIMARY_LENGTHS;
                             if (match_length == LZX_NUM_PRIMARY_LENGTHS) {
-                                READ_HUFFSYM_LOCAL(length_table, LZX_LENGTH_TABLEBITS,
+                                READ_HUFFSYM_LOCAL(length_table, LZX_LENGTH_TABLEBITS, LZX_TABLE_N(LENGTH),
                                                    length_footer);
                                 match_length += length_footer;
                             }
@@ -944,11 +949,11 @@ int LZXdecompress(struct LZXstate* pState, uint8_t* inpos, uint8_t* outpos, int 
                                     extra -= 3;
                                     READ_BITS(verbatim_bits, extra);
                                     match_offset += ((uint32_t)verbatim_bits << 3);
-                                    READ_HUFFSYM_LOCAL(aligned_table, LZX_ALIGNED_TABLEBITS,
+                                    READ_HUFFSYM_LOCAL(aligned_table, LZX_ALIGNED_TABLEBITS, LZX_TABLE_N(ALIGNED),
                                                        aligned_bits);
                                     match_offset += (uint32_t)aligned_bits;
                                 } else if (extra == 3) {
-                                    READ_HUFFSYM_LOCAL(aligned_table, LZX_ALIGNED_TABLEBITS,
+                                    READ_HUFFSYM_LOCAL(aligned_table, LZX_ALIGNED_TABLEBITS, LZX_TABLE_N(ALIGNED),
                                                        aligned_bits);
                                     match_offset += (uint32_t)aligned_bits;
                                 } else if (extra > 0) {

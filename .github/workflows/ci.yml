@@ -96,6 +96,8 @@ jobs:
         # regenerate with `bun cmd/build-dist.ts` and commit dist/ after src/ changes
         run: git diff --exit-code -- dist/chm.c dist/chm.h
       - name: Fuzz crashes (ASan + UBSan)
+        # UBSan is the default fuzz build on Linux. The env var keeps that
+        # explicit if the default ever changes.
         env:
           CHM_FUZZ_UBSAN: "1"
         run: bun cmd/fuzz.ts -check-crashes
